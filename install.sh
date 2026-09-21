@@ -63,6 +63,31 @@ done
 cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
 echo "opencode.json -> $TARGET/opencode.json"
 
+# Termux/standalone: 9router must run ON this device (localhost:20128 is local!)
+if [ "$IS_TERMUX" = true ] || [ "${CT002_LOCAL_ROUTER:-}" = "1" ]; then
+    echo ""
+    echo "=== 9ROUTER SETUP (runs on THIS device) ==="
+    if ! command -v 9router &> /dev/null; then
+        echo "[installing 9router...]"
+        npm install -g 9router
+    fi
+    if ! curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
+        echo "[starting 9router in background...]"
+        nohup 9router >/dev/null 2>&1 &
+        sleep 5
+    fi
+    echo ""
+    echo "[!] ONE MANUAL STEP:"
+    echo "    Open http://localhost:20128 in this device's browser"
+    echo "    → login/signup → copy your API key (sk-...)"
+    echo "    → paste it here:"
+    read -p "API key: " R9KEY
+    if [ -n "$R9KEY" ]; then
+        sed -i "s|YOUR_9ROUTER_KEY_HERE|$R9KEY|" "$TARGET/opencode.json"
+        echo "[key saved]"
+    fi
+fi
+
 # Install CT-002 agent
 cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
 echo "ct002.md -> $TARGET/agents/ct002.md"
