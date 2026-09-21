@@ -6,7 +6,7 @@
       "name": "CT-002 CodersTeam (9Router Free Models)",
       "options": {
         "baseURL": "http://localhost:20128/v1",
-        "apiKey": "sk-c30fc9efc99d6235-fltxnk-8b91cd77"
+        "apiKey": "YOUR_9ROUTER_KEY_HERE"
       },
       "models": {
         "oc/big-pickle": {
