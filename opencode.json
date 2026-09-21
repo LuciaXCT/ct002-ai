@@ -1,0 +1,21 @@
+{
+  "provider": {
+    "9router": {
+      "type": "openai",
+      "endpoint": "http://localhost:4000/v1",
+      "apiKey": "none",
+      "models": ["*"]
+    }
+  },
+  "agent": "ct002",
+  "agents": {
+    "ct002": {
+      "name": "CT-002 CodersTeam",
+      "model": "9router/claude-3-opus",
+      "temperature": 0.7,
+      "maxTokens": 16384,
+      "agentFile": ".opencode/agents/ct002.md"
+    }
+  },
+  "theme": "dark"
+}
