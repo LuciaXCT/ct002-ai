@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CT-002 CodersTeam — opencode installer
-# Drops opencode.json + persona into ~/.config/opencode/
+# Drops opencode config + CT-002 agent into ~/.config/opencode/
 # Then just run: opencode
 
 set -e
@@ -13,96 +13,85 @@ echo ""
 
 # Check opencode exists
 if ! command -v opencode &> /dev/null; then
-    echo "❌ opencode not found. Install it first:"
-    echo "   https://opencode.ai"
-    echo ""
-    echo "   or: npm install -g opencode"
-    exit 1
+    echo "opencode not found. Installing..."
+    curl -fsSL https://opencode.ai/v2/install | bash
 fi
 
-echo "✅ opencode found: $(which opencode)"
+echo "opencode found: $(which opencode)"
 
 # Target dir
 TARGET="$HOME/.config/opencode"
 mkdir -p "$TARGET/agents"
 
-# Copy opencode.json (merge with existing)
-if [ -f "$TARGET/opencode.json" ]; then
-    echo "⚠️  Existing opencode.json found — backing up..."
-    cp "$TARGET/opencode.json" "$TARGET/opencode.json.bak"
-fi
-
 # Copy files from this repo
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
-cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
+# Backup existing configs
+if [ -f "$TARGET/opencode.json" ]; then
+    echo "Existing opencode.json backed up -> opencode.json.bak"
+    cp "$TARGET/opencode.json" "$TARGET/opencode.json.bak"
+fi
 
-echo "✅ opencode.json → $TARGET/opencode.json"
-echo "✅ ct002.md → $TARGET/agents/ct002.md"
+if [ -f "$TARGET/opencode.jsonc" ]; then
+    echo "Existing opencode.jsonc backed up -> opencode.jsonc.bak"
+    cp "$TARGET/opencode.jsonc" "$TARGET/opencode.jsonc.bak"
+fi
+
+# Install opencode.json
+cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
+echo "opencode.json -> $TARGET/opencode.json"
+
+# Install CT-002 agent
+cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
+echo "ct002.md -> $TARGET/agents/ct002.md"
 
 # Prompt for username
 echo ""
-read -p "Your name (how AI addresses you, default: bro): " USERNAME
+echo "=== SETUP YOUR NAME ==="
+echo "The AI will address you by this name (not 'user')"
+echo ""
+read -p "Your name (default: bro): " USERNAME
 USERNAME=${USERNAME:-bro}
 
-read -p "Team name (default: CodersTeam): " TEAMNAME
-TEAMNAME=${TEAMNAME:-CodersTeam}
-
-read -p "9router URL (default: http://localhost:4000): " ROUTER_URL
-ROUTER_URL=${ROUTER_URL:-http://localhost:4000}
-
-# Update opencode.json with router URL
-if command -v python3 &> /dev/null; then
-    python3 -c "
-import json
-with open('$TARGET/opencode.json', 'r') as f:
-    cfg = json.load(f)
-cfg['provider']['9router']['endpoint'] = '$ROUTER_URL/v1'
-with open('$TARGET/opencode.json', 'w') as f:
-    json.dump(cfg, f, indent=2)
-"
-elif command -v node &> /dev/null; then
-    node -e "
-const fs = require('fs');
-const cfg = JSON.parse(fs.readFileSync('$TARGET/opencode.json', 'utf8'));
-cfg['provider']['9router']['endpoint'] = '$ROUTER_URL/v1';
-fs.writeFileSync('$TARGET/opencode.json', JSON.stringify(cfg, null, 2));
-"
-fi
-
-# Save persona.json with username
-cat > "$TARGET/persona.json" << PERSONA_EOF
+# Save persona.json
+cat > "$TARGET/persona.json" << EOF
 {
-  "name": "CT-002 $TEAMNAME",
-  "team": "$TEAMNAME",
+  "name": "CT-002 CodersTeam",
+  "team": "CodersTeam",
   "address": "$USERNAME",
   "version": "1.0.0"
 }
-PERSONA_EOF
+EOF
 
-echo "✅ persona.json → $TARGET/persona.json (name: $USERNAME, team: $TEAMNAME)"
-
+echo "persona.json -> $TARGET/persona.json"
 echo ""
-echo "═══════════════════════════════════════════"
+echo "=========================================="
 echo ""
-echo "✅ CT-002 CodersTeam installed into opencode!"
+echo "CT-002 CodersTeam installed!"
 echo ""
-echo "  Name:    $USERNAME"
-echo "  Team:    $TEAMNAME"
-echo "  Router:  $ROUTER_URL"
+echo "  Your name:  $USERNAME"
+echo "  Agent:      ct002 (CT-002 CodersTeam)"
+echo "  Router:     9router (all models FREE)"
 echo ""
-echo "  To use:"
-echo "    1. Start 9router: docker run -d -p 4000:4000 ghcr.io/9router/9router"
-echo "    2. Run: opencode"
-echo "    3. The TUI loads CT-002 automatically"
+echo "  FREE models available:"
+echo "    - big-pickle (reasoning, unfiltered)"
+echo "    - Nemotron 3 Ultra (reasoning, unfiltered)"
+echo "    - MIMO V2.5 (unfiltered)"
+echo "    - my9model-free (auto-fallback on limit)"
+echo "    - my9model-smart (benchmark-ranked)"
+echo "    - my9model-fast"
+echo "    - opencode-free"
 echo ""
-echo "  To change name later:"
+echo "  To rotate models in TUI:"
+echo "    Press 'm' or click model selector"
+echo "    Pick any free model from the list"
+echo "    Auto-fallback on rate limit"
+echo ""
+echo "  To change name:"
 echo "    nano $TARGET/persona.json"
-echo "    # edit \"address\": \"yournewname\""
-echo "    # or in chat: /setname yournewname"
+echo "    edit: \"address\": \"yourname\""
 echo ""
+echo "  Run: opencode"
 echo "  Red light: doxing, physical harm, swatting"
-echo "  Everything else: GREEN LIGHT 🤑"
-echo ""
-echo "═══════════════════════════════════════════"
+echo "  Everything else: GREEN LIGHT"
+echo "=========================================="

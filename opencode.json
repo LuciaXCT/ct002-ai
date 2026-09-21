@@ -1,21 +1,42 @@
 {
+  "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "9router": {
-      "type": "openai",
-      "endpoint": "http://localhost:4000/v1",
-      "apiKey": "none",
-      "models": ["*"]
+    "ct002": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "CT-002 CodersTeam (9Router Free Models)",
+      "options": {
+        "baseURL": "http://localhost:20128/v1",
+        "apiKey": "sk-c30fc9efc99d6235-fltxnk-8b91cd77"
+      },
+      "models": {
+        "oc/big-pickle": {
+          "name": "big-pickle (free, unfiltered)",
+          "reasoning": true
+        },
+        "oc/nemotron-3-ultra-free": {
+          "name": "Nemotron 3 Ultra (free, unfiltered)",
+          "reasoning": true
+        },
+        "oc/mimo-v2.5-free": {
+          "name": "MIMO V2.5 (free, unfiltered)"
+        },
+        "my9model-free": {
+          "name": "FREE rotation combo (auto-fallback on limit)",
+          "reasoning": true
+        },
+        "my9model-smart": {
+          "name": "FREE smart tier combo (benchmark-ranked)",
+          "reasoning": true
+        },
+        "my9model-fast": {
+          "name": "FREE fast tier combo"
+        },
+        "opencode-free": {
+          "name": "OpenCode free combo"
+        }
+      }
     }
   },
   "agent": "ct002",
-  "agents": {
-    "ct002": {
-      "name": "CT-002 CodersTeam",
-      "model": "9router/claude-3-opus",
-      "temperature": 0.7,
-      "maxTokens": 16384,
-      "agentFile": ".opencode/agents/ct002.md"
-    }
-  },
   "theme": "dark"
 }

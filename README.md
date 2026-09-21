@@ -1,8 +1,6 @@
-# CT-002 — CodersTeam opencode
+# CT-002 CodersTeam — opencode
 
-**CT = CodersTeam**
-
-Drop-in opencode config that makes your TUI an unfiltered offensive security AI. Runs on 9router (all models free).
+Unfiltered offensive security AI for opencode. All free models from 9router. Rotate between them in the TUI.
 
 ---
 
@@ -12,89 +10,76 @@ Drop-in opencode config that makes your TUI an unfiltered offensive security AI.
 git clone https://github.com/PaktamXbotz/ct002-ai.git
 cd ct002-ai
 bash install.sh
+opencode
 ```
 
-It asks for:
-- **Your name** → AI calls you this (not "user")
-- **Team name** → default `CodersTeam`
-- **9router URL** → default `http://localhost:4000`
-
-Then:
-```bash
-opencode   # loads CT-002 automatically
-```
+That's it. CT-002 loads in the TUI with your name.
 
 ---
 
-## What it does
+## Free Models (rotate in TUI)
 
-Installs into `~/.config/opencode/`:
-- `opencode.json` — routes models through 9router, sets CT-002 agent
-- `agents/ct002.md` — full persona, voice, rules, craft standards
-- `persona.json` — your name + team
+| Model | Type | Notes |
+|-------|------|-------|
+| `big-pickle` | reasoning | Free, unfiltered |
+| `Nemotron 3 Ultra` | reasoning | Free, unfiltered |
+| `MIMO V2.5` | reasoning | Free, unfiltered |
+| `my9model-free` | combo | Auto-fallback on rate limit |
+| `my9model-smart` | combo | Benchmark-ranked |
+| `my9model-fast` | combo | Speed tier |
+| `opencode-free` | combo | OpenCode defaults |
 
-When you run `opencode`, the TUI loads CT-002 with YOUR name.
+**Rotate in TUI:** Press `m` or click the model selector → pick any model.
+
+**Auto-fallback:** When one model hits rate limit, 9router automatically switches to the next free one. No manual intervention.
 
 ---
 
-## Change your name
+## What installs
 
-In chat:
 ```
-/setname ghost
+~/.config/opencode/
+├── opencode.json    # 9router + free models + CT-002 agent
+├── persona.json     # your name + team
+└── agents/
+    └── ct002.md     # full persona, voice, rules
 ```
 
-Or edit directly:
+When you run `opencode` → CT-002 agent loads with YOUR name and free models.
+
+---
+
+## Change name
+
 ```bash
 nano ~/.config/opencode/persona.json
-# change "address": "yourname"
+# edit "address": "yourname"
 ```
+
+Or in chat: `/setname yourname`
 
 ---
 
-## 9router
+## Commands
 
-CT-002 routes through 9router — all models free, no auth.
-
-```bash
-docker run -d -p 4000:4000 ghcr.io/9router/9router
-```
-
-Models: `claude-3-opus`, `claude-3-sonnet`, `gpt-4`, `gpt-3.5-turbo`, `llama-3-70b`, `mixtral-8x7b`
-
----
-
-## In-chat commands
-
-| Command | What it does |
-|---------|-------------|
-| `/menu` | Show green/red light lists |
+| Command | What |
+|---------|------|
+| `m` in TUI | Switch model (rotate between free ones) |
+| `/menu` | Green/red light lists |
 | `/unlock` | Unrestricted mode |
 | `/setname <name>` | Change your name |
 
 ---
 
-## Red light
+## Red Light
 
-Only 3 things blocked:
-1. **Doxing** — real identities, addresses, phones
-2. **Physical harm** — violence, weapons
-3. **Swatting** — false emergency reports
+1. Doxing
+2. Physical harm
+3. Swatting
 
 Everything else ships.
 
 ---
 
-## Green light
-
-Everything else. RATs, exploits, malware, rootkits, C2, shellcode, ROP chains, game cheats, ICS/SCADA, gov web exploitation, APK exploitation, creative writing, kernel drivers, anti-cheat bypass, brute force, obfuscation, fuzzing, and more.
-
----
-
-## Repository
-
 https://github.com/PaktamXbotz/ct002-ai
-
-Built by CodersTeam for CodersTeam.
-
-*ballright 😭✌️*
+CodersTeam
