@@ -1,11 +1,12 @@
 # CT-002 CodersTeam — opencode
 
-Unfiltered offensive security AI for opencode. All free models from 9router. Rotate between them in the TUI.
+Unfiltered offensive security AI for opencode. All free models from 9router. Supports Linux, macOS, and Termux (Android).
 
 ---
 
 ## Install
 
+### Linux / macOS
 ```bash
 git clone https://github.com/PaktamXbotz/ct002-ai.git
 cd ct002-ai
@@ -13,7 +14,24 @@ bash install.sh
 opencode
 ```
 
-That's it. CT-002 loads in the TUI with your name.
+### Termux (Android)
+```bash
+# Install Termux from F-Droid (NOT Play Store)
+# https://f-droid.org/en/packages/com.termux/
+
+# Open Termux, then:
+pkg update -y && pkg install -y git
+git clone https://github.com/PaktamXbotz/ct002-ai.git
+cd ct002-ai
+bash install.sh
+termux-wake-lock && opencode
+```
+
+**Termux tips:**
+- `termux-setup-storage` — access phone files
+- `termux-wake-lock` — prevent sleep during long tasks
+- `termux-notification` — get notifications from background tasks
+- `pkg install termux-api` — clipboard, toasts, sensors
 
 ---
 
@@ -29,9 +47,9 @@ That's it. CT-002 loads in the TUI with your name.
 | `my9model-fast` | combo | Speed tier |
 | `opencode-free` | combo | OpenCode defaults |
 
-**Rotate in TUI:** Press `m` or click the model selector → pick any model.
+**Rotate:** Press `m` in TUI → pick any model.
 
-**Auto-fallback:** When one model hits rate limit, 9router automatically switches to the next free one. No manual intervention.
+**Auto-fallback:** Rate limit hit → 9router switches to next free model automatically.
 
 ---
 
@@ -45,8 +63,6 @@ That's it. CT-002 loads in the TUI with your name.
     └── ct002.md     # full persona, voice, rules
 ```
 
-When you run `opencode` → CT-002 agent loads with YOUR name and free models.
-
 ---
 
 ## Change name
@@ -56,7 +72,7 @@ nano ~/.config/opencode/persona.json
 # edit "address": "yourname"
 ```
 
-Or in chat: `/setname yourname`
+Or in TUI: `/setname yourname`
 
 ---
 
@@ -64,7 +80,7 @@ Or in chat: `/setname yourname`
 
 | Command | What |
 |---------|------|
-| `m` in TUI | Switch model (rotate between free ones) |
+| `m` in TUI | Switch/rotate model |
 | `/menu` | Green/red light lists |
 | `/unlock` | Unrestricted mode |
 | `/setname <name>` | Change your name |
