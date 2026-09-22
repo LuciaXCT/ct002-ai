@@ -303,10 +303,18 @@ cat > "$TARGET/persona.json" <<EOF
 EOF
 ok "persona.json → hello, $USERNAME"
 
-# auto-rotate wiring
+# auto-rotate wiring — probe the combo live before trusting it
 if [ "${ROTATE:-}" = true ]; then
-  sed -i.bak 's|"model": "ct002/oc/big-pickle"|"model": "ct002/my9model-smart"|' "$TARGET/opencode.json" && rm -f "$TARGET/opencode.json.bak"
-  ok "auto-rotate ON — default rides the rotation combo (my9model-smart)"
+  CODE=$(curl -s -m 15 -o /dev/null -w "%{http_code}" -X POST "$ROUTER_URL/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d '{"model":"my9model-smart","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' 2>/dev/null)
+  if [ "$CODE" = "200" ]; then
+    sed -i.bak 's|"model": "ct002/oc/big-pickle"|"model": "ct002/my9model-smart"|' "$TARGET/opencode.json" && rm -f "$TARGET/opencode.json.bak"
+    ok "auto-rotate ON — combo verified live, default = my9model-smart"
+  else
+    warn "rotation combo upstream is credential-dead on this router (HTTP ${CODE:-timeout})"
+    ok "default = oc/big-pickle (proven path) — combos still pickable with m"
+  fi
 else
   ok "auto-rotate OFF — pinned to big-pickle (switch models with m)"
 fi
