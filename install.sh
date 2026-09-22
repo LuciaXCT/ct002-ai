@@ -356,6 +356,14 @@ cp "$REPO_DIR/ct002-doctor" "$TARGET/ct002-doctor"
 chmod +x "$TARGET/ct002-doctor"
 printf '%s  doctor → check model health: ct002-doctor (--fix heals a dead default)%s\n' "$DM" "$X"
 
+# put helpers on PATH (termux: $PREFIX/bin, else ~/.local/bin)
+BIN_DIR="${PREFIX:-}/bin"
+[ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+ln -sf "$TARGET/ct002-doctor" "$BIN_DIR/ct002-doctor"
+ln -sf "$TARGET/ct002-name" "$BIN_DIR/ct002-name"
+case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
+
 # keeping an existing agent? still rename it to the chosen name
 if [ "$INSTALL_AGENT" = false ]; then
   "$TARGET/ct002-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"
