@@ -274,6 +274,11 @@ done
 cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
 ok "config → $TARGET/opencode.json"
 
+# retire legacy .jsonc — it loads AFTER .json and shadows the new setup
+for f in "$TARGET/opencode.jsonc"; do
+  [ -f "$f" ] && mv "$f" "$f.retired.$(date +%s)" && warn "retired old opencode.jsonc (its agents were shadowing CT-002)"
+done
+
 if [ "$INSTALL_AGENT" = true ]; then
   cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agent/ct002.md"
   cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
