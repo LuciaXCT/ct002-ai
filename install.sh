@@ -365,8 +365,11 @@ printf '%s  doctor → check model health: ct002-doctor (--fix heals a dead defa
 BIN_DIR="${PREFIX:-}/bin"
 [ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
+cp "$REPO_DIR/ct002-serve" "$TARGET/ct002-serve"
+chmod +x "$TARGET/ct002-serve"
 ln -sf "$TARGET/ct002-doctor" "$BIN_DIR/ct002-doctor"
 ln -sf "$TARGET/ct002-name" "$BIN_DIR/ct002-name"
+ln -sf "$TARGET/ct002-serve" "$BIN_DIR/ct002-serve"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
 
 # keeping an existing agent? still rename it to the chosen name
@@ -397,7 +400,10 @@ node -e "JSON.parse(require('fs').readFileSync('$TARGET/opencode.json','utf8'))"
 printf '\n%s  ██████████████████████████████████%s\n' "$G" "$X"
 printf '%s   CT-002 INSTALLED%s\n' "$B" "$X"
 printf '%s   run:  opencode%s\n' "$G" "$X"
-[ "$IS_TERMUX" = true ] && printf '%s   termux: termux-wake-lock && opencode%s\n' "$G" "$X"
+if [ "$IS_TERMUX" = true ]; then
+  printf '%s   termux: ct002-serve (own session) + opencode in another%s\n' "$G" "$X"
+  printf '%s   watchdog auto-revives the router when Android freezes it%s\n' "$DM" "$X"
+fi
 printf '%s   models rotate in TUI — press m%s\n' "$DM" "$X"
 printf '%s   your key lives only in %s — never in this repo%s\n' "$DM" "$TARGET/opencode.json" "$X"
 printf '%s  ██████████████████████████████████%s\n\n' "$G" "$X"

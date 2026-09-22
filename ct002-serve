@@ -1,0 +1,84 @@
+#!/bin/bash
+# ct002-serve — watchdog that keeps 9router alive on Android/Termux
+# why: Android freezes/kills Termux processes seconds after you leave the app
+#      (and the dashboard's memory spike can trip the OOM killer).
+#      This revives the router automatically, forever.
+#
+#   ct002-serve start    → guard the router (run this INSTEAD of bare `9router`)
+#   ct002-serve status   → is the router up? is the guard awake?
+#   ct002-serve stop     → stop guard + router
+
+PORT=20128
+URL="http://localhost:$PORT/v1/models"
+LOG="$HOME/.9router/serve.log"
+PIDFILE="$HOME/.9router/serve.pid"
+
+alive() { curl -s -m 3 -o /dev/null "$URL"; }
+
+start_router() {
+  nohup 9router --no-browser --skip-update >>"$LOG" 2>&1 &
+}
+
+notify() {
+  command -v termux-notification >/dev/null 2>&1 && \
+    termux-notification --title "CT-002" --content "$1" >/dev/null 2>&1
+}
+
+case "${1:-start}" in
+  start)
+    mkdir -p "$(dirname "$LOG")"
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "watchdog already running (pid $(cat "$PIDFILE"))"
+      exit 0
+    fi
+    if alive; then
+      echo "router already up on :$PORT — watchdog will guard it"
+    else
+      start_router
+      sleep 5
+      alive && echo "router started on :$PORT" || echo "router booting slowly — watchdog will keep reviving it"
+    fi
+    if command -v termux-wake-lock >/dev/null 2>&1; then
+      termux-wake-lock && echo "wake lock held (CPU won't sleep)"
+    fi
+    echo "$$" > "$PIDFILE"
+    trap 'rm -f "$PIDFILE"; exit 0' INT TERM
+    notify "9router watchdog active"
+    RESTARTS=0
+    echo "watchdog awake (pid $$) — every 10s it checks, revives if dead. log: $LOG"
+    while true; do
+      sleep 10
+      if ! alive; then
+        RESTARTS=$((RESTARTS+1))
+        echo "$(date '+%H:%M:%S') router down — reviving (#$RESTARTS)" >> "$LOG"
+        pkill -f "9router" 2>/dev/null
+        sleep 1
+        start_router
+        sleep 8
+        alive && notify "9router revived (#$RESTARTS)"
+      fi
+    done
+    ;;
+  status)
+    if alive; then echo "router  : UP on :$PORT"; else echo "router  : DOWN"; fi
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "watchdog: running (pid $(cat "$PIDFILE"))"
+    else
+      echo "watchdog: not running — start it with: ct002-serve"
+    fi
+    [ -f "$LOG" ] && echo "recent events:" && tail -5 "$LOG" | sed 's/^/    /'
+    ;;
+  stop)
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null && rm -f "$PIDFILE" && echo "watchdog stopped"
+    else
+      echo "watchdog was not running"
+    fi
+    pkill -f "9router" 2>/dev/null
+    command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock
+    echo "router stopped"
+    ;;
+  *)
+    echo "usage: ct002-serve [start|status|stop]"
+    ;;
+esac
