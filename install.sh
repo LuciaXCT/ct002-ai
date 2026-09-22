@@ -1,184 +1,303 @@
 #!/bin/bash
 
-# CT-002 CodersTeam — opencode installer
-# Supports: Linux, macOS, Termux (Android)
-# Drops opencode config + CT-002 agent into ~/.config/opencode/
-# Then just run: opencode
+# CT-002 CodersTeam — interactive opencode installer
+# Linux / macOS / Termux / WSL
+# Every step asks first. Nothing is auto-installed without your say-so.
 
-set -e
+set -u
 
-echo "[🤑Made CT-OO2]"
-echo "wazzup bro 😭✌️"
-echo "🤑installing CT-002 CodersTeam into opencode..."
-echo ""
-
-# Detect environment
-IS_TERMUX=false
-if [ -d "/data/data/com.termux" ] || [ -n "$TERMUX_VERSION" ] || [ -n "$PREFIX" ] && echo "$PREFIX" | grep -q "com.termux"; then
-    IS_TERMUX=true
-    echo "[termux] detected — using Termux paths"
+# ─── palette ────────────────────────────────────────────────
+if [ -t 1 ]; then
+  R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; C=$'\e[36m'; B=$'\e[1m'; DM=$'\e[2m'; X=$'\e[0m'
+else
+  R=""; G=""; Y=""; C=""; B=""; DM=""; X=""
 fi
 
-# Check opencode exists
-if ! command -v opencode &> /dev/null; then
-    if [ "$IS_TERMUX" = true ]; then
-        echo "opencode not found. Installing for Termux..."
-        echo ""
-        echo "Make sure you have termux-api and storage access:"
-        echo "  pkg install termux-api"
-        echo "  termux-setup-storage"
-        echo ""
-        
-        # Install deps for Termux
-        echo "Installing dependencies..."
-        pkg update -y 2>/dev/null || apt update -y
-        pkg install -y curl nodejs git 2>/dev/null || apt install -y curl nodejs git 2>/dev/null
-        
-        # Install opencode
-        curl -fsSL https://opencode.ai/v2/install | bash
-    else
-        echo "opencode not found. Installing..."
-        curl -fsSL https://opencode.ai/v2/install | bash
-    fi
-fi
-
-echo "opencode found: $(which opencode)"
-
-# Target dir (same for all platforms — opencode uses ~/.config/opencode)
-TARGET="$HOME/.config/opencode"
-mkdir -p "$TARGET/agents"
-
-# Copy files from this repo
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+TARGET="$HOME/.config/opencode"
 
-# Backup existing configs
-for f in opencode.json opencode.jsonc; do
-    if [ -f "$TARGET/$f" ]; then
-        cp "$TARGET/$f" "$TARGET/$f.bak"
-        echo "backed up: $f -> $f.bak"
-    fi
+# ─── helpers ────────────────────────────────────────────────
+have() { command -v "$1" &>/dev/null; }
+
+hr()  { printf '%s──────────────────────────────────────────────%s\n' "$DM" "$X"; }
+
+step() { printf '\n%s[%s]%s %s\n' "$C" "$1" "$X" "$2"; }
+
+ok()   { printf '%s  ✓ %s%s\n' "$G" "$1" "$X"; }
+warn() { printf '%s  ! %s%s\n' "$Y" "$1" "$X"; }
+err()  { printf '%s  ✗ %s%s\n' "$R" "$1" "$X"; }
+
+# ask_yn "question" [default: Y|N]  → exits 0 on yes
+ask_yn() {
+  local q="$1" def="${2:-Y}" a
+  local hint=$([ "$def" = "Y" ] && printf 'Y/n' || printf 'y/N')
+  while true; do
+    printf '%s? %s %s[%s]%s ' "$B" "$q" "$DM" "$hint" "$X"
+    read -r a || a=""
+    a=$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')
+    [ -z "$a" ] && a=$(printf '%s' "$def" | tr '[:upper:]' '[:lower:]')
+    case "$a" in
+      y|yes) return 0 ;;
+      n|no)  return 1 ;;
+    esac
+  done
+}
+
+mask_key() { printf '%s…%s' "${1:0:10}" "${1: -4}"; }
+
+spin() {
+  local msg="$1" pid="$2" i=0 ch='|/-\' t=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r%s [%s] %s' "$C" "${ch:i++%4:1}" "$msg"
+    sleep 0.12; t=$((t+1)); [ $t -gt 200 ] && break
+  done
+  printf '\r\033[K'
+}
+
+# ─── banner ─────────────────────────────────────────────────
+clear 2>/dev/null || true
+printf '%s' "$C"
+cat <<'ART'
+   ██████╗████████╗     ██████╗  ██████╗ ██████╗
+  ██╔════╝╚══██╔══╝    ██╔══██╗██╔════╝██╔═══██╗
+  ██║        ██║       ██████╔╝██║    ██║   ██║
+  ██║        ██║       ██╔══██╗██║    ██║   ██║
+  ╚██████╗   ██║       ██║  ██║╚██████╗╚██████╔╝
+   ╚═════╝   ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
+ART
+printf '%s' "$X"
+printf '%s   CodersTeam-002 · unfiltered opencode setup · v1.1%s\n\n' "$B" "$X"
+
+# ─── environment detection ──────────────────────────────────
+IS_TERMUX=false; IS_WSL=false; OS_NAME="linux"
+[ -d "/data/data/com.termux" ] && IS_TERMUX=true
+grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=true
+have sw_vers && OS_NAME="mac"
+
+step "1/6" "Environment"
+if [ "$IS_TERMUX" = true ]; then
+  ok "Termux (Android) detected"
+elif [ "$IS_WSL" = true ]; then
+  ok "WSL (${OS_NAME}) detected"
+elif [ "$OS_NAME" = "mac" ]; then
+  ok "macOS detected"
+else
+  ok "${OS_NAME} detected"
+fi
+
+# ─── mode choice ────────────────────────────────────────────
+printf '\n%sWhere should the AI brain live?%s\n' "$B" "$X"
+printf '  %s1)%s %s on-device%s — opencode + 9router both installed HERE (works offline, free models)\n' "$Y" "$X" "$B" "$X"
+printf '  %s2)%s %s connect%s   — opencode here, brain on another machine (LAN/localhost router)\n' "$Y" "$X" "$B" "$X"
+printf '  %s3)%s %s skip%s      — config only, I already have a router endpoint + key\n' "$Y" "$X" "$B" "$X"
+MODE=""
+while true; do
+  printf '? choice %s[1]%s: ' "$DM" "$X"
+  read -r MODE || MODE=""
+  MODE=${MODE:-1}
+  case "$MODE" in 1|2|3) break ;; esac
+  warn "pick 1, 2 or 3"
 done
 
-# Install opencode.json
-cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
-echo "opencode.json -> $TARGET/opencode.json"
+[ "$IS_TERMUX" = true ] && [ "$MODE" = "1" ] && MODE=1
+ROUTER_URL="http://localhost:20128"
 
-# Termux/standalone: 9router must run ON this device (localhost:20128 is local!)
-if [ "$IS_TERMUX" = true ] || [ "${CT002_LOCAL_ROUTER:-}" = "1" ]; then
-    echo ""
-    echo "=== 9ROUTER SETUP (runs on THIS device) ==="
-    if ! command -v 9router &> /dev/null; then
-        echo "[installing 9router...]"
-        npm install -g 9router
+# ─── dependencies (always asked) ────────────────────────────
+step "2/6" "Dependencies"
+DEPS=""
+have curl || DEPS="curl $DEPS"
+have git  || DEPS="git $DEPS"
+if [ -n "$DEPS" ]; then
+  warn "missing: $DEPS"
+  if ask_yn "install missing packages now?"; then
+    if [ "$IS_TERMUX" = true ]; then
+      pkg update -y >/dev/null 2>&1 & SPID=$!; spin "pkg update" $SPID
+      pkg install -y $DEPS >/dev/null 2>&1 && ok "installed: $DEPS" || err "pkg failed — install manually: pkg install $DEPS"
+    elif [ "$OS_NAME" = "mac" ]; then
+      brew install $DEPS >/dev/null 2>&1 && ok "installed: $DEPS" || err "brew failed — install manually"
+    else
+      sudo apt-get update -y >/dev/null 2>&1 & SPID=$!; spin "apt update" $SPID
+      sudo apt-get install -y $DEPS >/dev/null 2>&1 && ok "installed: $DEPS" || err "apt failed — install manually: sudo apt install $DEPS"
     fi
-    if ! curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
-        echo "[starting 9router in background...]"
-        nohup 9router >/dev/null 2>&1 &
-        sleep 5
-    fi
-    echo ""
-    echo "[!] ONE MANUAL STEP:"
-    echo "    Open http://localhost:20128 in this device's browser"
-    echo "    → login/signup → copy your API key (sk-...)"
-    echo "    → paste it here:"
-    read -p "API key: " R9KEY
-    if [ -n "$R9KEY" ]; then
-        sed -i "s|YOUR_9ROUTER_KEY_HERE|$R9KEY|" "$TARGET/opencode.json"
-        echo "[key saved]"
-    fi
+  else
+    warn "continuing without — things may fail later"
+  fi
+else
+  ok "curl + git present"
 fi
 
-# Install CT-002 agent
-cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
-echo "ct002.md -> $TARGET/agents/ct002.md"
+# ─── opencode ───────────────────────────────────────────────
+step "3/6" "opencode"
+if have opencode; then
+  ok "already installed: $(opencode --version 2>/dev/null || which opencode)"
+else
+  if ask_yn "opencode not found — install it now?" Y; then
+    curl -fsSL https://opencode.ai/install | bash & SPID=$!
+    spin "downloading opencode" $SPID
+    wait $SPID && ok "opencode installed" || { err "install failed — see https://opencode.ai/docs"; exit 1; }
+    export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
+  else
+    err "opencode is required — aborting"; exit 1
+  fi
+fi
 
-# Prompt for username
-echo ""
-echo "=== SETUP YOUR NAME ==="
-echo "The AI will address you by this name (not 'user')"
-echo ""
-read -p "Your name (default: bro): " USERNAME
-USERNAME=${USERNAME:-bro}
+# ─── router + key ───────────────────────────────────────────
+API_KEY=""
 
-# Save persona.json
-cat > "$TARGET/persona.json" << EOF
-{
-  "name": "CT-002 CodersTeam",
-  "team": "CodersTeam",
-  "address": "$USERNAME",
-  "version": "1.0.0",
-  "termux": $IS_TERMUX
+fetch_local_key() {
+  local mid sec tok
+  mid=$(cat "$HOME/.9router/machine-id" 2>/dev/null || true)
+  sec=$(cat "$HOME/.9router/auth/cli-secret" 2>/dev/null || true)
+  [ -z "$mid" ] && [ -z "$sec" ] && return 1
+  tok=$(printf '%s9r-cli-auth%s' "$mid" "$sec" | sha256sum | cut -c1-16)
+  curl -s -m 5 -H "x-9r-cli-token: $tok" http://localhost:20128/api/keys \
+    | grep -o '"key":"[^"]*"' | head -1 | cut -d'"' -f4
 }
+
+case "$MODE" in
+  1)
+    step "4/6" "9router (the free-model brain)"
+    if have 9router; then
+      ok "already installed"
+    else
+      if ask_yn "install 9router on this device? (needs node/npm)" Y; then
+        if ! have npm; then
+          if [ "$IS_TERMUX" = true ]; then
+            ask_yn "install nodejs via pkg?" Y && pkg install -y nodejs >/dev/null 2>&1
+          else
+            err "npm missing — install node.js first (https://nodejs.org)"; exit 1
+          fi
+        fi
+        npm install -g 9router >/dev/null 2>&1 & SPID=$!
+        spin "npm install -g 9router" $SPID
+        wait $SPID && ok "9router installed" || { err "npm install failed"; exit 1; }
+      else
+        err "on-device mode needs 9router — pick mode 2 or 3 next time"; exit 1
+      fi
+    fi
+
+    if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
+      ok "router already running on :20128"
+    else
+      if ask_yn "start 9router now (background)?" Y; then
+        (nohup 9router --no-browser >/dev/null 2>&1 &) 
+        sleep 4
+        curl -s -m 5 -o /dev/null http://localhost:20128/v1/models \
+          && ok "router is up" || warn "router not answering yet — give it 10s, then run: 9router"
+      else
+        warn "start it later with: 9router"
+      fi
+    fi
+
+    step "5/6" "API key"
+    KEY_AUTO=$(fetch_local_key || true)
+    if [ -n "$KEY_AUTO" ]; then
+      ok "key found automatically: $(mask_key "$KEY_AUTO")"
+      if ask_yn "use this key?" Y; then API_KEY="$KEY_AUTO"; fi
+    fi
+    if [ -z "$API_KEY" ]; then
+      printf '%s  paste your sk-... key (input hidden)%s\n' "$DM" "$X"
+      printf '%s  (dashboard → Keys page → copy)%s\n' "$DM" "$X"
+      read -rs -p "  key: " API_KEY; echo
+    fi
+    [ -z "$API_KEY" ] && err "no key — config will keep the placeholder; edit $TARGET/opencode.json later"
+    ;;
+  2)
+    step "4/6" "Remote router"
+    printf '? router base URL %s[http://localhost:20128]%s: ' "$DM" "$X"
+    read -r ROUTER_URL || ROUTER_URL=""
+    ROUTER_URL=${ROUTER_URL:-http://localhost:20128}
+    if curl -s -m 4 -o /dev/null "$ROUTER_URL/v1/models"; then
+      ok "router reachable: $ROUTER_URL"
+    else
+      warn "router not reachable right now (firewall? wrong IP? router down?)"
+      ask_yn "continue anyway?" N || exit 1
+    fi
+    step "5/6" "API key"
+    printf '%s  on the router machine: open %s → Keys → copy key%s\n' "$DM" "$ROUTER_URL" "$X"
+    read -rs -p "  paste sk-... key (input hidden): " API_KEY; echo
+    ;;
+  3)
+    step "4/6" "Skip router setup"
+    ok "skipped — endpoint + key stay as placeholders"
+    step "5/6" "API key"
+    ok "skipped — edit $TARGET/opencode.json later"
+    ;;
+esac
+
+# ─── persona / agent ────────────────────────────────────────
+mkdir -p "$TARGET/agent" "$TARGET/agents"
+INSTALL_AGENT=true
+if [ -f "$TARGET/agent/ct002.md" ] || [ -f "$TARGET/agents/ct002.md" ]; then
+  if ! ask_yn "CT-002 agent already exists — overwrite (backup made)?" N; then
+    INSTALL_AGENT=false
+    ok "keeping existing agent"
+  fi
+fi
+
+# ─── summary + confirm ──────────────────────────────────────
+printf '\n%s── SUMMARY ──────────────────────────────%s\n' "$B" "$X"
+printf '  mode        : %s\n' "$([ "$MODE" = 1 ] && printf 'on-device' || { [ "$MODE" = 2 ] && printf 'connect %s' "$ROUTER_URL" || printf 'config-only'; })"
+printf '  opencode    : %s\n' "$(have opencode && printf 'ready' || printf 'MISSING')"
+printf '  9router     : %s\n' "$([ "$MODE" = 1 ] && { curl -s -m 3 -o /dev/null http://localhost:20128/v1/models && printf 'running' || printf 'not running yet'; } || printf 'n/a')"
+printf '  api key     : %s\n' "$([ -n "$API_KEY" ] && mask_key "$API_KEY" || printf 'placeholder (edit later)')"
+printf '  agent       : %s\n' "$([ "$INSTALL_AGENT" = true ] && printf 'install/overwrite ct002.md' || printf 'keep existing')"
+hr
+if ! ask_yn "apply this setup?"; then
+  err "aborted — nothing was written"; exit 1
+fi
+
+# ─── apply ──────────────────────────────────────────────────
+step "6/6" "Applying"
+for f in opencode.json opencode.jsonc; do
+  [ -f "$TARGET/$f" ] && cp "$TARGET/$f" "$TARGET/$f.bak.$(date +%s)" && warn "backed up: $f"
+done
+
+cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
+ok "config → $TARGET/opencode.json"
+
+if [ "$INSTALL_AGENT" = true ]; then
+  cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agent/ct002.md"
+  cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
+  ok "agent → agent/ct002.md + agents/ct002.md (both conventions)"
+fi
+
+if [ -n "$API_KEY" ]; then
+  sed -i.bak "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json" 2>/dev/null \
+    || sed -i '' "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json"
+  ok "key written to config (stays on this device only)"
+fi
+
+if [ "$MODE" = 2 ] && [ -n "$ROUTER_URL" ]; then
+  sed -i.bak "s|http://localhost:20128/v1|$ROUTER_URL/v1|" "$TARGET/opencode.json" 2>/dev/null \
+    || sed -i '' "s|http://localhost:20128/v1|$ROUTER_URL/v1|" "$TARGET/opencode.json"
+  ok "endpoint → $ROUTER_URL/v1"
+fi
+
+# username
+printf '\n? your name (the AI addresses you by it) %s[bro]%s: ' "$DM" "$X"
+read -r USERNAME || USERNAME=""
+USERNAME=${USERNAME:-bro}
+cat > "$TARGET/persona.json" <<EOF
+{ "name": "CT-002 CodersTeam", "team": "CodersTeam", "address": "$USERNAME", "version": "1.1.0" }
 EOF
+ok "persona.json → hello, $USERNAME"
 
-echo "persona.json -> $TARGET/persona.json"
-
-# Termux-specific setup
-if [ "$IS_TERMUX" = true ]; then
-    echo ""
-    echo "[termux] Setting up Termux environment..."
-    
-    # Storage access
-    if [ ! -d "$HOME/storage" ]; then
-        echo "[termux] Requesting storage access..."
-        termux-setup-storage 2>/dev/null || echo "  (run 'termux-setup-storage' manually if needed)"
-    fi
-    
-    # Create symlinks for common tools
-    mkdir -p "$HOME/.local/bin"
-    
-    # Add to PATH if not already
-    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc" 2>/dev/null
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
-        echo "[termux] Added ~/.local/bin to PATH"
-    fi
-    
-    # Alias for opencode
-    echo 'alias opencode="opencode"' >> "$HOME/.bashrc" 2>/dev/null
-    
-    # Termux wake lock (prevent sleep during long tasks)
-    echo "[termux] Tip: use 'termux-wake-lock' to prevent sleep during long tasks"
-    
-    # Recommended Termux packages
-    echo ""
-    echo "[termux] Recommended packages (install if needed):"
-    echo "  pkg install termux-api    # clipboard, notifications, toasts"
-    echo "  pkg install openssh       # SSH access"
-    echo "  pkg install python        # Python support"
-    echo "  pkg install git           # Git support"
-    echo "  termux-setup-storage      # access phone files"
-    echo "  termux-wake-lock          # prevent sleep"
+# ─── verify ─────────────────────────────────────────────────
+printf '\n%s── VERIFY ───────────────────────────────%s\n' "$B" "$X"
+if curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" | grep -q '"id"'; then
+  ok "router serving models:"
+  curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" \
+    | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -7 | sed 's/^/      /'
+else
+  warn "couldn't list models right now — if the router just booted, wait 10s and run: opencode"
 fi
 
-echo ""
-echo "=========================================="
-echo ""
-echo "CT-002 CodersTeam installed!"
-echo ""
-echo "  Your name:  $USERNAME"
-echo "  Agent:      ct002 (CT-002 CodersTeam)"
-echo "  Router:     9router (all models FREE)"
-if [ "$IS_TERMUX" = true ]; then
-echo "  Platform:   Termux (Android)"
-fi
-echo ""
-echo "  FREE models (rotate in TUI with 'm'):"
-echo "    - big-pickle       (reasoning, unfiltered)"
-echo "    - Nemotron 3 Ultra (reasoning, unfiltered)"
-echo "    - MIMO V2.5        (unfiltered)"
-echo "    - my9model-free    (auto-fallback on limit)"
-echo "    - my9model-smart   (benchmark-ranked)"
-echo "    - my9model-fast    (speed tier)"
-echo "    - opencode-free    (defaults)"
-echo ""
-echo "  Run: opencode"
-if [ "$IS_TERMUX" = true ]; then
-echo "  Termux tip: termux-wake-lock && opencode"
-fi
-echo ""
-echo "  To change name: nano $TARGET/persona.json"
-echo "  Red light: doxing, physical harm, swatting"
-echo "  Everything else: GREEN LIGHT"
-echo "=========================================="
+# ─── done ───────────────────────────────────────────────────
+printf '\n%s  ██████████████████████████████████%s\n' "$G" "$X"
+printf '%s   CT-002 INSTALLED%s\n' "$B" "$X"
+printf '%s   run:  opencode%s\n' "$G" "$X"
+[ "$IS_TERMUX" = true ] && printf '%s   termux: termux-wake-lock && opencode%s\n' "$G" "$X"
+printf '%s   models rotate in TUI — press m%s\n' "$DM" "$X"
+printf '%s   your key lives only in %s — never in this repo%s\n' "$DM" "$TARGET/opencode.json" "$X"
+printf '%s  ██████████████████████████████████%s\n\n' "$G" "$X"
