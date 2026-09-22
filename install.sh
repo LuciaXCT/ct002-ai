@@ -307,10 +307,10 @@ else
 fi
 
 # bake the name into the agent files (trigger words + addressing)
+for AF in "$TARGET/agent/ct002.md" "$TARGET/agents/ct002.md"; do
+  [ -f "$AF" ] && sed -i.bak "s|{{USER_NAME}}|$USERNAME|g" "$AF" && rm -f "$AF.bak"
+done
 if [ "$INSTALL_AGENT" = true ]; then
-  for AF in "$TARGET/agent/ct002.md" "$TARGET/agents/ct002.md"; do
-    [ -f "$AF" ] && sed -i.bak "s|{{USER_NAME}}|$USERNAME|g" "$AF" && rm -f "$AF.bak"
-  done
   ok "name baked in — 'hey ct002' now greets you as $USERNAME"
 fi
 
@@ -337,6 +337,11 @@ echo "bet — CT-002 calls you $N now. restart opencode."
 EOF
 chmod +x "$TARGET/ct002-name"
 printf '%s  helper → change name anytime: ~/.config/opencode/ct002-name <newname>%s\n' "$DM" "$X"
+
+# keeping an existing agent? still rename it to the chosen name
+if [ "$INSTALL_AGENT" = false ]; then
+  "$TARGET/ct002-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"
+fi
 
 # ─── verify ─────────────────────────────────────────────────
 printf '\n%s── VERIFY ───────────────────────────────%s\n' "$B" "$X"
