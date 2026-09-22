@@ -398,6 +398,12 @@ chmod +x "$TARGET/ct002-serve"
 ln -sf "$TARGET/ct002-doctor" "$BIN_DIR/ct002-doctor"
 ln -sf "$TARGET/ct002-name" "$BIN_DIR/ct002-name"
 ln -sf "$TARGET/ct002-serve" "$BIN_DIR/ct002-serve"
+
+# arena — the arena.ai experience: blind battles, your vote, elo board
+cp "$REPO_DIR/arena-battle/arena-tui.mjs" "$TARGET/ct002-arena"
+chmod +x "$TARGET/ct002-arena"
+ln -sf "$TARGET/ct002-arena" "$BIN_DIR/ct002-arena"
+printf '%s  arena → blind model battles: ct002-arena (agent mode: ct002-arena -t "task")%s\n' "$DM" "$X"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
 
 # keeping an existing agent? still rename it to the chosen name
