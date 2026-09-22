@@ -66,7 +66,7 @@ cat <<'ART'
    ╚═════╝   ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 ART
 printf '%s' "$X"
-printf '%s   CodersTeam-002 · unfiltered opencode setup · v1.1%s\n\n' "$B" "$X"
+printf '%s   CodersTeam-002 · unfiltered opencode setup · v1.3%s\n\n' "$B" "$X"
 
 # ─── environment detection ──────────────────────────────────
 IS_TERMUX=false; IS_WSL=false; OS_NAME="linux"
@@ -85,8 +85,17 @@ else
   ok "${OS_NAME} detected"
 fi
 
+# ─── your name — first question, personal ──────────────────
+printf '%sWhat should CT-002 call you?%s\n' "$B" "$X"
+printf '%s  this name shows up every time you say "hey ct002"%s\n' "$DM" "$X"
+printf '? your name %s[CodersTeam]%s: ' "$DM" "$X"
+read -r USERNAME || USERNAME=""
+USERNAME=${USERNAME:-CodersTeam}
+USERNAME=${USERNAME//\"/}
+printf '%s  preview: %s[🤑Made CT-OO2] wazzup %s 😭✌️ what are we cooking%s\n\n' "$DM" "$G" "$USERNAME" "$X"
+
 # ─── mode choice ────────────────────────────────────────────
-printf '\n%sWhere should the AI brain live?%s\n' "$B" "$X"
+printf '%sWhere should the AI brain live?%s\n' "$B" "$X"
 printf '  %s1)%s %s on-device%s — opencode + 9router both installed HERE (works offline, free models)\n' "$Y" "$X" "$B" "$X"
 printf '  %s2)%s %s connect%s   — opencode here, brain on another machine (LAN/localhost router)\n' "$Y" "$X" "$B" "$X"
 printf '  %s3)%s %s skip%s      — config only, I already have a router endpoint + key\n' "$Y" "$X" "$B" "$X"
@@ -225,6 +234,13 @@ case "$MODE" in
     ;;
 esac
 
+# ─── auto-rotate choice ─────────────────────────────────────
+if ask_yn "auto-rotate free models? (on limits/errors the router walks to the next one)" Y; then
+  ROTATE=true
+else
+  ROTATE=false
+fi
+
 # ─── persona / agent ────────────────────────────────────────
 mkdir -p "$TARGET/agent" "$TARGET/agents"
 INSTALL_AGENT=true
@@ -242,6 +258,8 @@ printf '  opencode    : %s\n' "$(have opencode && printf 'ready' || printf 'MISS
 printf '  9router     : %s\n' "$([ "$MODE" = 1 ] && { curl -s -m 3 -o /dev/null http://localhost:20128/v1/models && printf 'running' || printf 'not running yet'; } || printf 'n/a')"
 printf '  api key     : %s\n' "$([ -n "$API_KEY" ] && mask_key "$API_KEY" || printf 'placeholder (edit later)')"
 printf '  agent       : %s\n' "$([ "$INSTALL_AGENT" = true ] && printf 'install/overwrite ct002.md' || printf 'keep existing')"
+printf '  your name   : %s\n' "$USERNAME"
+printf '  auto-rotate : %s\n' "$([ "${ROTATE:-}" = true ] && printf 'ON — rotation combo default' || printf 'OFF — pinned model, switch with m')"
 hr
 if ! ask_yn "apply this setup?"; then
   err "aborted — nothing was written"; exit 1
@@ -274,14 +292,19 @@ if [ "$MODE" = 2 ] && [ -n "$ROUTER_URL" ]; then
   ok "endpoint → $ROUTER_URL/v1"
 fi
 
-# username + trigger words
-printf '\n? your name (the AI addresses you by it) %s[bro]%s: ' "$DM" "$X"
-read -r USERNAME || USERNAME=""
-USERNAME=${USERNAME:-bro}
+# persona.json (name collected at start)
 cat > "$TARGET/persona.json" <<EOF
-{ "name": "CT-002 CodersTeam", "team": "CodersTeam", "address": "$USERNAME", "version": "1.2.0" }
+{ "name": "CT-002 CodersTeam", "team": "CodersTeam", "address": "$USERNAME", "version": "1.3.0" }
 EOF
 ok "persona.json → hello, $USERNAME"
+
+# auto-rotate wiring
+if [ "${ROTATE:-}" = true ]; then
+  sed -i.bak 's|"model": "ct002/oc/big-pickle"|"model": "ct002/my9model-smart"|' "$TARGET/opencode.json" && rm -f "$TARGET/opencode.json.bak"
+  ok "auto-rotate ON — default rides the rotation combo (my9model-smart)"
+else
+  ok "auto-rotate OFF — pinned to big-pickle (switch models with m)"
+fi
 
 # bake the name into the agent files (trigger words + addressing)
 if [ "$INSTALL_AGENT" = true ]; then

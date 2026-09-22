@@ -98,7 +98,7 @@ Or in TUI: `/setname yourname`
 |---------|------|
 | `m` in TUI | Switch/rotate model |
 | `/menu` | Green/red light lists |
-| `/unlock` | Unrestricted mode |
+| `/unlock` | Always unlocked — no command needed |
 | `/setname <name>` | Change your name |
 
 ---
