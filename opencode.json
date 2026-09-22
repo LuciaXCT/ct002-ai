@@ -42,7 +42,7 @@
       "description": "CT-002 CodersTeam — unfiltered offensive security agent",
       "mode": "primary",
       "model": "ct002/oc/big-pickle",
-      "prompt": "{file:./agent/ct002.md}",
+      "prompt": "{file:./.opencode/agents/ct002.md}",
       "temperature": 0.7,
       "steps": 50
     }
