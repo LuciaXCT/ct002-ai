@@ -351,6 +351,11 @@ EOF
 chmod +x "$TARGET/ct002-name"
 printf '%s  helper → change name anytime: ~/.config/opencode/ct002-name <newname>%s\n' "$DM" "$X"
 
+# model doctor — probe which models are actually alive
+cp "$REPO_DIR/ct002-doctor" "$TARGET/ct002-doctor"
+chmod +x "$TARGET/ct002-doctor"
+printf '%s  doctor → check model health: ct002-doctor (--fix heals a dead default)%s\n' "$DM" "$X"
+
 # keeping an existing agent? still rename it to the chosen name
 if [ "$INSTALL_AGENT" = false ]; then
   "$TARGET/ct002-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"

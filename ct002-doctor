@@ -1,0 +1,94 @@
+#!/usr/bin/env node
+// ct002-doctor — probe every model in your opencode config, show what's alive
+// run:  ct002-doctor          → health table
+//       ct002-doctor --fix    → also switch default to a live model if the current one is dead
+
+import fs from 'node:fs';
+import os from 'node:os';
+
+const CFG = os.homedir() + '/.config/opencode/opencode.json';
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(CFG, 'utf8'));
+} catch {
+  console.log('✗ no config at ' + CFG + ' — run the ct002-ai installer first');
+  process.exit(1);
+}
+
+const prov = cfg.provider?.ct002;
+if (!prov) {
+  console.log('✗ no ct002 provider in config — run the installer');
+  process.exit(1);
+}
+const base = (prov.options?.baseURL || '').replace(/\/v1\/?$/, '');
+const key = prov.options?.apiKey || '';
+const models = Object.keys(prov.models || {});
+if (!models.length) {
+  console.log('✗ no models listed in config');
+  process.exit(1);
+}
+
+async function probe(model) {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(base + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(20000),
+    });
+    const ms = Date.now() - t0;
+    const body = await r.json().catch(() => ({}));
+    const msg = (body && body.error && body.error.message) || '';
+    if (r.ok) return { model, ok: true, ms, tag: 'ALIVE', note: '' };
+    if (r.status === 401 || r.status === 403 || /credential|unauthor|invalid api key/i.test(msg))
+      return { model, ok: false, tag: 'DEAD CREDS', note: 'quota demoted — may revive later' };
+    if (r.status === 429) return { model, ok: true, ms, tag: 'RATE-LIMITED', note: 'alive, cooling down' };
+    if (r.status >= 500) return { model, ok: false, tag: 'UPSTREAM DOWN', note: msg.slice(0, 60) };
+    return { model, ok: false, tag: 'ERR ' + r.status, note: msg.slice(0, 60) };
+  } catch (e) {
+    return { model, ok: false, tag: 'TIMEOUT', note: String(e).slice(0, 40) };
+  }
+}
+
+const current = (cfg.agent?.ct002?.model || '').replace(/^ct002\//, '');
+const width = Math.max(...models.map((m) => m.length)) + 2;
+
+console.log('\n  ct002-doctor — probing ' + models.length + ' models on ' + base + ' …\n');
+const results = await Promise.all(models.map(probe));
+
+for (const r of results) {
+  const cur = r.model === current ? '  ← current default' : '';
+  const combo = /my9model|opencode-free|combo/i.test(r.model) ? '  [auto-rotate combo]' : '';
+  const note = r.note ? '  · ' + r.note : '';
+  console.log('  ' + (r.ok ? '✓' : '✗') + ' ' + r.model.padEnd(width) + r.tag + combo + cur + note);
+}
+
+const aliveSorted = results.filter((r) => r.ok && r.ms).sort((a, b) => a.ms - b.ms);
+if (aliveSorted.length) {
+  console.log('\n  fastest alive: ' + aliveSorted[0].model + ' (' + aliveSorted[0].ms + 'ms)');
+}
+const aliveIds = results.filter((r) => r.ok).map((r) => r.model);
+const currentResult = results.find((r) => r.model === current);
+
+if (process.argv.includes('--fix')) {
+  if (currentResult && currentResult.ok) {
+    console.log('  default is alive — nothing to fix');
+  } else if (aliveIds.length) {
+    cfg.agent.ct002.model = 'ct002/' + aliveIds[0];
+    fs.writeFileSync(CFG, JSON.stringify(cfg, null, 2));
+    console.log('  fixed: default → ct002/' + aliveIds[0] + ' — restart opencode');
+  } else {
+    console.log('  nothing alive — is the router up? run: 9router');
+  }
+} else if (currentResult && !currentResult.ok && aliveIds.length) {
+  console.log('  default is DEAD — rerun with --fix to heal it');
+}
+
+const combosAlive = results.filter((r) => r.ok && /my9model|opencode-free|combo/i.test(r.model));
+if (combosAlive.length) {
+  console.log('  auto-rotate: AVAILABLE — use a [combo] model as default (m in TUI, or --fix)');
+} else {
+  console.log('  auto-rotate: combos are credential-dead right now — they revive when quota resets');
+}
+console.log('');
