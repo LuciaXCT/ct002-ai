@@ -6,12 +6,31 @@
 import fs from 'node:fs';
 import os from 'node:os';
 
-const CFG = os.homedir() + '/.config/opencode/opencode.json';
-let cfg;
-try {
-  cfg = JSON.parse(fs.readFileSync(CFG, 'utf8'));
-} catch {
-  console.log('✗ no config at ' + CFG + ' — run the ct002-ai installer first');
+import path from 'node:path';
+
+const HOME = os.homedir();
+const CANDIDATES = [
+  HOME + '/.config/opencode/opencode.json',
+  HOME + '/.config/opencode/opencode.jsonc',
+];
+
+function loadConfig() {
+  for (const p of CANDIDATES) {
+    if (!fs.existsSync(p)) continue;
+    let raw = fs.readFileSync(p, 'utf8');
+    // jsonc: strip comments + trailing commas so we can JSON.parse it
+    raw = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    raw = raw.replace(/,(\s*[}\]])/g, '$1');
+    try {
+      return { cfg: JSON.parse(raw), file: p };
+    } catch {}
+  }
+  return { cfg: null, file: CANDIDATES[0] };
+}
+
+const { cfg, file: CFG } = loadConfig();
+if (!cfg) {
+  console.log('✗ no readable config at ' + CFG + ' — run the ct002-ai installer first');
   process.exit(1);
 }
 
@@ -76,6 +95,7 @@ if (process.argv.includes('--fix')) {
     console.log('  default is alive — nothing to fix');
   } else if (aliveIds.length) {
     cfg.agent.ct002.model = 'ct002/' + aliveIds[0];
+    if (cfg.model !== undefined) cfg.model = 'ct002/' + aliveIds[0];
     fs.writeFileSync(CFG, JSON.stringify(cfg, null, 2));
     console.log('  fixed: default → ct002/' + aliveIds[0] + ' — restart opencode');
   } else {
