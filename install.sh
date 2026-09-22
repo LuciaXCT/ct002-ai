@@ -319,6 +319,11 @@ else
   ok "auto-rotate OFF — pinned to big-pickle (switch models with m)"
 fi
 
+# retire legacy jsonc BEFORE final validation — it shadows the new config
+for f in "$TARGET/opencode.jsonc"; do
+  [ -f "$f" ] && mv "$f" "$f.retired.$(date +%s)" && warn "retired old opencode.jsonc (shadowing CT-002)"
+done
+
 # bake the name into the agent files (trigger words + addressing)
 for AF in "$TARGET/agent/ct002.md" "$TARGET/agents/ct002.md"; do
   [ -f "$AF" ] && sed -i.bak "s|{{USER_NAME}}|$USERNAME|g" "$AF" && rm -f "$AF.bak"
@@ -369,15 +374,24 @@ if [ "$INSTALL_AGENT" = false ]; then
   "$TARGET/ct002-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"
 fi
 
-# ─── verify ─────────────────────────────────────────────────
+# ─── verify + AUTO-HEAL ────────────────────────────────────
 printf '\n%s── VERIFY ───────────────────────────────%s\n' "$B" "$X"
 if curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" | grep -q '"id"'; then
   ok "router serving models:"
   curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" \
     | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -7 | sed 's/^/      /'
+  # doctor's verdict + self-heal so install NEVER ends on a dead default
+  if [ -x "$TARGET/ct002-doctor" ]; then
+    "$TARGET/ct002-doctor" --fix 2>/dev/null | grep -E 'ALIVE|DEAD|fixed|default is alive|auto-rotate' | sed 's/^/      /'
+  fi
 else
-  warn "couldn't list models right now — if the router just booted, wait 10s and run: opencode"
+  warn "couldn't list models right now — if the router just booted, wait 10s and run: ct002-doctor --fix"
 fi
+
+# validate the final config — an install must never end with an unbootable setup
+node -e "JSON.parse(require('fs').readFileSync('$TARGET/opencode.json','utf8'))" 2>/dev/null \
+  && ok "config JSON valid — opencode will boot" \
+  || { err "config JSON broken — restoring known-good"; cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"; [ -n "$API_KEY" ] && sed -i.bak "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json" && rm -f "$TARGET/opencode.json.bak"; }
 
 # ─── done ───────────────────────────────────────────────────
 printf '\n%s  ██████████████████████████████████%s\n' "$G" "$X"
