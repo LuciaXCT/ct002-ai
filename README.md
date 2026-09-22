@@ -59,18 +59,34 @@ termux-wake-lock && opencode
 ~/.config/opencode/
 ├── opencode.json    # 9router + free models + CT-002 agent
 ├── persona.json     # your name + team
-└── agents/
-    └── ct002.md     # full persona, voice, rules
+├── ct002-name       # rename helper
+└── agent/ + agents/
+    └── ct002.md     # full persona, voice, rules (your name baked in)
 ```
+
+---
+
+## Calling CT-002
+
+Say **hey ct002**, **ct-002**, **CT002** or **hey ct** in any message — it greets you by your name:
+
+```
+you: hey ct002
+CT-002: [🤑Made CT-OO2] wazzup lucia 😭✌️ what are we cooking
+```
+
+The persona is always loaded — trigger words are a greeting, not an activation.
 
 ---
 
 ## Change name
 
 ```bash
-nano ~/.config/opencode/persona.json
-# edit "address": "yourname"
+~/.config/opencode/ct002-name yourname
+# → restart opencode
 ```
+
+Or let CT-002 do it: tell it "set my name to X" — it runs the helper for you.
 
 Or in TUI: `/setname yourname`
 

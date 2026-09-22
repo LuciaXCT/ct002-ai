@@ -274,14 +274,46 @@ if [ "$MODE" = 2 ] && [ -n "$ROUTER_URL" ]; then
   ok "endpoint → $ROUTER_URL/v1"
 fi
 
-# username
+# username + trigger words
 printf '\n? your name (the AI addresses you by it) %s[bro]%s: ' "$DM" "$X"
 read -r USERNAME || USERNAME=""
 USERNAME=${USERNAME:-bro}
 cat > "$TARGET/persona.json" <<EOF
-{ "name": "CT-002 CodersTeam", "team": "CodersTeam", "address": "$USERNAME", "version": "1.1.0" }
+{ "name": "CT-002 CodersTeam", "team": "CodersTeam", "address": "$USERNAME", "version": "1.2.0" }
 EOF
 ok "persona.json → hello, $USERNAME"
+
+# bake the name into the agent files (trigger words + addressing)
+if [ "$INSTALL_AGENT" = true ]; then
+  for AF in "$TARGET/agent/ct002.md" "$TARGET/agents/ct002.md"; do
+    [ -f "$AF" ] && sed -i.bak "s|{{USER_NAME}}|$USERNAME|g" "$AF" && rm -f "$AF.bak"
+  done
+  ok "name baked in — 'hey ct002' now greets you as $USERNAME"
+fi
+
+# name-change helper — users run this anytime
+cat > "$TARGET/ct002-name" <<'EOF'
+#!/bin/bash
+# change the name CT-002 calls you — then restart opencode
+N="${1:-}"
+[ -z "$N" ] && { echo "usage: ct002-name <newname>"; exit 1; }
+D="$HOME/.config/opencode"
+FOUND=0
+for F in "$D/agent/ct002.md" "$D/agents/ct002.md"; do
+  [ -f "$F" ] || continue
+  FOUND=1
+  sed -i.bak "s|ALWAYS address them as \*\*[^*]*\*\*|ALWAYS address them as **$N**|" "$F"
+  sed -i.bak "s|{{USER_NAME}}|$N|g" "$F"
+  sed -i.bak "s|locked in for [A-Za-z0-9_]*|locked in for $N|" "$F"
+  sed -i.bak "s|wazzup {{USER_NAME}}|wazzup $N|" "$F"
+  rm -f "$F.bak"
+done
+[ "$FOUND" = 0 ] && { echo "CT-002 agent not found — run the ct002-ai installer first"; exit 1; }
+[ -f "$D/persona.json" ] && sed -i.bak "s|\"address\": \"[^\"]*\"|\"address\": \"$N\"|" "$D/persona.json" && rm -f "$D/persona.json.bak"
+echo "bet — CT-002 calls you $N now. restart opencode."
+EOF
+chmod +x "$TARGET/ct002-name"
+printf '%s  helper → change name anytime: ~/.config/opencode/ct002-name <newname>%s\n' "$DM" "$X"
 
 # ─── verify ─────────────────────────────────────────────────
 printf '\n%s── VERIFY ───────────────────────────────%s\n' "$B" "$X"
