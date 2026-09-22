@@ -117,23 +117,32 @@ into `$PREFIX/bin` (Termux) or `~/.local/bin` (everything else).
 
 ## 8. Router not answering / `curl: (7) Failed to connect` on :20128
 
-The router isn't running. Termux kills background processes aggressively:
+**Android freezes/kills Termux background processes** — usually 3-5s after you switch apps
+(that "stuck after opening the dashboard" feeling = Android pausing Termux the moment you left it).
+
+**The fix: the watchdog.**
 
 ```bash
-9router                              # run it in its OWN session, leave it open
-# wait for "Server: http://localhost:20128"
+termux-wake-lock && ct002-serve       # session 1: guard + auto-revive the router, forever
+opencode                              # session 2: your AI
 ```
 
-Then in a NEW session:
+The watchdog checks every 10s and revives the router automatically (with a phone notification
+when it does). Status/stop:
 
 ```bash
-termux-wake-lock                     # stops Termux sleeping + killing the router
-ct002-doctor                         # confirm models answer
+ct002-serve status    # router up? watchdog awake? recent revives
+cat ~/.9router/serve.log   # what happened while you were away
+ct002-serve stop      # shut it all down
 ```
 
-For real persistence: **`9router -t`** runs tray/background mode. If the router keeps dying,
-keep that session open or use `tmux` (`pkg install tmux`, `tmux new -s r9`, run `9router`,
-detach with ctrl+b d).
+Extras that help Android behave:
+- Termux notification → **Acquire wakelock** button
+- Android settings → battery → **unoptimize Termux** (stop battery murder)
+- `tmux` alternative: `pkg install tmux && tmux new -s r9` → run `9router` → detach ctrl+b d
+
+If opencode errors with connection refused right after the phone slept, just wait ~8s —
+the watchdog is mid-revive.
 
 ---
 
