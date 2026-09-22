@@ -8,7 +8,7 @@ Unfiltered offensive security AI for opencode. All free models from 9router. Sup
 
 ### Linux / macOS
 ```bash
-git clone https://github.com/PaktamXbotz/ct002-ai.git
+git clone https://github.com/LuciaXCT/ct002-ai.git
 cd ct002-ai
 bash install.sh
 opencode
@@ -21,7 +21,7 @@ opencode
 
 # Open Termux, then:
 pkg update -y && pkg install -y git
-git clone https://github.com/PaktamXbotz/ct002-ai.git
+git clone https://github.com/LuciaXCT/ct002-ai.git
 cd ct002-ai
 bash install.sh
 termux-wake-lock && opencode
@@ -113,5 +113,5 @@ Everything else ships.
 
 ---
 
-https://github.com/PaktamXbotz/ct002-ai
+https://github.com/LuciaXCT/ct002-ai
 CodersTeam
