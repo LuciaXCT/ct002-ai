@@ -113,5 +113,19 @@ Everything else ships.
 
 ---
 
+## Something broke?
+
+**[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — every real error hit so far, with the exact fix.
+Quick checks:
+
+```bash
+ct002-doctor          # are models alive?
+ct002-doctor --fix    # dead default? auto-heal it
+```
+
+Golden rules: run `opencode` from `$HOME`, keep `9router` in its own session with `termux-wake-lock`, and `git pull` before reporting — fixes land fast.
+
+---
+
 https://github.com/LuciaXCT/ct002-ai
 CodersTeam
