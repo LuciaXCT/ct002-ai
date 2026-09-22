@@ -243,4 +243,14 @@ fs.writeFileSync(path.join(os.tmpdir(), "arena-agent-report.json"), JSON.stringi
 console.log(`   report:  ${path.join(os.tmpdir(), "arena-agent-report.json")}`);
 console.log(`\n   diff vs original:`);
 console.log(diffDir(CWD, winner.workdir).split("\n").map(l => "     " + l).join("\n"));
-console.log(`\n   to adopt:  cp -a "${winner.workdir}/." "${CWD}/"`);
+console.log(`   to adopt:  cp -a "${winner.workdir}/." "${CWD}/"   (or rerun with --adopt)`);
+
+// --adopt: stamp the winner's files into the real project (never touches .git)
+if (args.includes("--adopt")) {
+  try {
+    sh(`(cd "${winner.workdir}" && tar --exclude=.git -cf - .) | (cd "${CWD}" && tar -xf -)`, { shell: "/bin/bash" });
+    console.log(`\n✅ adopted — winner's files are now in ${CWD}`);
+  } catch (e) {
+    console.error(`adopt failed: ${e?.message || e}`);
+  }
+}

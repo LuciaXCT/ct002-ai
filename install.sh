@@ -292,6 +292,16 @@ done
 cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
 ok "config → $TARGET/opencode.json"
 
+# /arena command — race agents from the ctrl+p palette
+mkdir -p "$TARGET/command"
+cp "$REPO_DIR/opencode/command/arena.md" "$TARGET/command/arena.md"
+ok "command → /arena (ctrl+p palette)"
+
+# arena-agent — the race engine the command drives
+mkdir -p "$HOME/arena-battle"
+cp "$REPO_DIR/arena-battle/arena-agent.mjs" "$HOME/arena-battle/arena-agent.mjs"
+ok "arena-agent → $HOME/arena-battle/arena-agent.mjs"
+
 # retire legacy .jsonc — it loads AFTER .json and shadows the new setup
 for f in "$TARGET/opencode.jsonc"; do
   [ -f "$f" ] && mv "$f" "$f.retired.$(date +%s)" && warn "retired old opencode.jsonc (its agents were shadowing CT-002)"
