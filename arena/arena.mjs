@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // arena — standalone uncensored chat TUI on 9router. no opencode. no middleman.
 //
-//   arena            ← this is the whole manual
+//   arena-chat       ← this is the whole manual (bare `arena` = your Go CLI, untouched)
 //
 // keys: type · enter send · esc abort stream · m models · /menu deck · ctrl+c quit
 // config: ~/.arena/config.json  { "key": "sk-...", "upstream": "http://localhost:20128", "model": "..." }
