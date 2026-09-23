@@ -239,7 +239,7 @@ function compactCard() {
     "  1 menu    2 board   3 models  4 doctor",
     "  5 arena   6 agents  7 critic  8 brainstorm",
     "  9 debate  10 verify  o opencode",
-    "  full TUI: ct002-menu · inside opencode: /arena",
+    "  reply with a number to open it · popup: ct002-menu",
   ];
 }
 
@@ -280,9 +280,10 @@ function menuFrame(sel) {
   ];
   ITEMS.forEach((it, i) => {
     const cur = i === sel;
-    const bar = cur ? `${PB}▌${RST} ` : "  ";
-    const name = cur ? `${PB}${B}${it.icon} ${it.label}${RST}` : `${it.icon} ${it.label}`;
-    lines.push({ s: `${bar}${name}  ${DIM}${it.desc}${RST}`, c: "" });
+    const bar = cur ? `${GRN}${B}▌${RST} ` : "  ";
+    const name = cur ? `${GRN}${B}${it.icon} ${it.label}${RST}` : `${it.icon} ${it.label}`;
+    const desc = cur ? `${GRN}${it.desc}${RST}` : `${DIM}${it.desc}${RST}`;
+    lines.push({ s: `${bar}${name}  ${desc}`, c: "" });
   });
   const foot = `${PB}⏵⏵${RST} ${DIM}enter run${RST}  ${P}▣${RST} ${DIM}ct002 · CodersTeam${RST}`;
   frame(" ct002 ", lines, foot);
@@ -388,7 +389,7 @@ async function brainSession(mode) {
       { s: `  ${PB}${B}pick the brain${RST}  ${DIM}${models.length} live${RST}`, c: "" },
       { s: "", c: "" },
       ...models.slice(0, 14).map((mm, i) => ({
-        s: `  ${i === sel ? PB + "▌ ⏵ " : "   "}${mm}${RST}  ${DIM}${i === sel ? "← enter" : ""}${RST}`, c: "",
+        s: `  ${i === sel ? GRN + B + "▌ ⏵ " + GRN + mm + RST : "   " + mm}${i === sel ? "  " + GRN + "← enter" + RST : ""}`, c: "",
       })),
     ];
     frame(` ct002/${m.title} `, lines, `${PB}⏵⏵${RST} ${DIM}↑↓ pick · enter go · b back${RST}`);
