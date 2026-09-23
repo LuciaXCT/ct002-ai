@@ -14,7 +14,7 @@ import path from "node:path";
 import { execSync, spawnSync } from "node:child_process";
 import readline from "node:readline";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const HOME = os.homedir();
 const ELO_FILE = path.join(HOME, ".arena", "elo.json");
 const UPSTREAM = process.env.ARENA_UPSTREAM || "http://localhost:20128";
@@ -40,6 +40,7 @@ const ITEMS = [
   { key: "8", icon: "🧠", label: "BRAINSTORM", desc: "safe / wild / insane tiers",       kind: "brain", mode: "brainstorm" },
   { key: "9", icon: "⚖️", label: "DEBATE",     desc: "critic + brainstorm, verdict",     kind: "brain", mode: "debate" },
   { key: "0", icon: "✅", label: "VERIFY",     desc: "run a command, formatted result",  kind: "verify" },
+  { key: "o", icon: "🐰", label: "OPENCODE",   desc: "drop into chat — deck resumes after", kind: "opencode" },
 ];
 
 // ── brain modes — the deck calls the router ITSELF, no opencode handoff ──
@@ -237,8 +238,8 @@ function compactCard() {
     "⏵⏵ CT-002 DECK — CodersTeam",
     "  1 menu    2 board   3 models  4 doctor",
     "  5 arena   6 agents  7 critic  8 brainstorm",
-    "  9 debate  10 verify",
-    "  full TUI → tmux + /arena · or run: ct002-menu",
+    "  9 debate  10 verify  o opencode",
+    "  full TUI: ct002-menu · inside opencode: /arena",
   ];
 }
 
@@ -323,10 +324,11 @@ async function interactive() {
     if (k === "quit") { process.exit(0); }
     else if (k === "up") sel = (sel + ITEMS.length - 1) % ITEMS.length;
     else if (k === "down") sel = (sel + 1) % ITEMS.length;
-    else if (/^[0-9]$/.test(k)) {
+    else if (k === "enter") await runItem(ITEMS[sel]);
+    else {
       const idx = ITEMS.findIndex(i => i.key === k);
       if (idx >= 0) { sel = idx; await runItem(ITEMS[idx]); }
-    } else if (k === "enter") await runItem(ITEMS[sel]);
+    }
   }
 }
 async function runItem(it) {
@@ -351,6 +353,20 @@ async function runItem(it) {
     const argv = [engine, ...(it.run === "task" ? ["-t", arg] : [])];
     try { spawnSync(process.execPath, argv, { stdio: "inherit" }); } catch {}
     process.exit(0);
+  }
+  if (it.kind === "opencode") {
+    process.stdout.write("\x1b[?1049l\x1b[?25h");
+    const spec = process.env.CT002_OPENCODE || "opencode";
+    const bin = spec.split(" ")[0];
+    const args = spec.split(" ").slice(1);
+    const has = spawnSync("sh", ["-c", `command -v "${bin}" >/dev/null 2>&1`]).status === 0;
+    if (!has) {
+      process.stdout.write(`${RED}  ✗ ${bin} not installed — https://opencode.ai${RST}\n`);
+      await askLine("");
+      return;
+    }
+    try { spawnSync(bin, args, { stdio: "inherit" }); } catch {}
+    return; // interactive loop redraws the deck
   }
   if (it.kind === "brain") { await brainSession(it.mode); return; }
   if (it.kind === "verify") { await verifySession(); return; }
@@ -499,8 +515,15 @@ function launch() {
 }
 
 // ── entry ─────────────────────────────────────────────────────
-const argv = process.argv.slice(2);
-if (argv[0] === "launch") { launch(); process.exit(0); }
+const argv = process.argv.slice(2);  if (argv[0] === "launch") { launch(); process.exit(0); }
+if (argv[0] === "here") {
+  // run opencode FIRST, deck after — zero tmux needed, /arena friendly
+  const spec = process.env.CT002_OPENCODE || "opencode";
+  const bin = spec.split(" ")[0], args = spec.split(" ").slice(1);
+  try { spawnSync(bin, args, { stdio: "inherit" }); } catch {}
+  if (process.stdout.isTTY) { try { spawnSync(process.execPath, [SELF], { stdio: "inherit" }); } catch {} }
+  process.exit(0);
+}
 if (argv[0] === "panel") {
   const which = argv[1] || "menu";
   const w = process.stdout.columns || 80;
