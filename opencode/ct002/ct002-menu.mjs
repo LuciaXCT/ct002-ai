@@ -260,8 +260,7 @@ function frame(title, lines, footer) {
   const w = process.stdout.columns || 80;
   const h = process.stdout.rows || 24;
   const scr = [];
-  const top = `╭─ ${title} `.padEnd(w - 1, "─") + "╮";
-  scr.push(P + top + RST);
+  scr.push(P + `╭─ ${title} `.padEnd(w - 1, "─") + "╮" + RST);
   const body = lines.slice(-Math.max(1, h - 4));
   for (let i = 0; i < h - 4; i++) {
     const it = body[i];
@@ -269,7 +268,27 @@ function frame(title, lines, footer) {
   }
   scr.push(P + "╰" + "─".repeat(w - 2) + "╯" + RST);
   if (footer) scr.push(" " + footer);
-  process.stdout.write(CLR + scr.join("\n") + "\n");
+  // flickerless: home + overwrite + per-line clear — NEVER 2J
+  process.stdout.write("\x1b[H" + scr.map(l => l + "\x1b[K").join("\n") + "\n\x1b[J");
+}
+// arena-style split: two live panels side by side (debate)
+function splitFrame(title, lT, lBody, rT, rBody, footer) {
+  const w = process.stdout.columns || 80;
+  const h = process.stdout.rows || 24;
+  const hw = Math.max(20, Math.floor((w - 1) / 2) - 1);
+  const hh = Math.max(4, h - 6);
+  const lB = flowLines(lBody, hw - 4).slice(-hh);
+  const rB = flowLines(rBody, hw - 4).slice(-hh);
+  const rows = [P + `╭─ ${title} `.padEnd(w - 1, "─") + "╮" + RST];
+  rows.push(P + `╭─ ${lT} `.padEnd(hw - 1, "─") + "╮" + RST + " " + P + `╭─ ${rT} `.padEnd(hw - 1, "─") + "╮" + RST);
+  for (let i = 0; i < hh; i++) {
+    const l = (lB[i] ?? "").padEnd(hw - 4);
+    const r = (rB[i] ?? "").padEnd(hw - 4);
+    rows.push(P + "│" + RST + " " + l + " " + P + "│" + RST + " " + P + "│" + RST + " " + r + " " + P + "│" + RST);
+  }
+  rows.push(P + "╰" + "─".repeat(hw - 2) + "╯" + RST + " " + P + "╰" + "─".repeat(hw - 2) + "╯" + RST);
+  rows.push(" " + (footer || ""));
+  process.stdout.write("\x1b[H" + rows.map(l => l + "\x1b[K").join("\n") + "\n\x1b[J");
 }
 function deckHeader() {
   const w = process.stdout.columns || 80;
@@ -433,6 +452,52 @@ async function brainSession(mode) {
     { role: "system", content: m.sys },
     { role: "user", content: topic },
   ];
+  // DEBATE = arena-style: second model fights the same topic, split screen,
+  // a judge model picks the winner — same shape as the arena battle
+  if (mode === "debate") {
+    const models2 = aliveModels().filter(x => x !== model);
+    const modelB = models2.find(x => x.includes("big-pickle")) || models2.find(x => x.includes("mimo")) || models2[0] || model;
+    let accA = "", accB = "", wheelI = 0;
+    const t0d = Date.now();
+    const WHEELD = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const footD = () => `${PB}${WHEELD[wheelI++ % WHEELD.length]}${RST} ${B}A:${model}${RST} ${DIM}vs${RST} ${B}B:${modelB}${RST}  ${DIM}· judge decides · esc abort${RST}`;
+    const drawD = () => splitFrame(` ct002/debate `, ` A · ${model} `, accA, ` B · ${modelB} `, accB, footD());
+    drawD();
+    const abortD = new AbortController();
+    const escD = (async () => {
+      process.stdin.setRawMode(true); process.stdin.resume();
+      for (;;) {
+        const ch = await new Promise(res => { const f = d => { process.stdin.removeListener("data", f); res(d.toString()); }; process.stdin.on("data", f); });
+        if (ch === "\x1b" || ch === "\x03") { abortD.abort(); break; }
+      }
+    })();
+    const tickD = setInterval(drawD, 150);
+    const criticSys = MODES.critic.sys;
+    const brainSys = MODES.brainstorm.sys;
+    const jobs = [
+      streamChat(model, [...messages.slice(0, -1), { role: "system", content: criticSys }, { role: "user", content: topic }], d => { accA += d; }, 180_000, abortD.signal),
+      streamChat(modelB, [...messages.slice(0, -1), { role: "system", content: brainSys }, { role: "user", content: topic }], d => { accB += d; }, 180_000, abortD.signal),
+    ];
+    const [ra, rb] = await Promise.all(jobs);
+    clearInterval(tickD); escD.catch(() => {});
+    if (abortD.signal.aborted) { accA += "\n⏵⏵ aborted"; }
+    drawD();
+    // judge — separate model scores both
+    splitFrame(` ct002/debate `, ` A · ${model} `, accA, ` B · ${modelB} `, accB, `${DIM}judge reading both sides…${RST}`);
+    const jtext = ra.err && rb.err ? "" : await streamChat(pickModel(), [
+      { role: "user", content: `Two debate positions on "${topic}". A is a critic pass, B is a brainstorm pass. Pick the more useful one and give a one-line verdict. Format:\nWINNER: A|B|TIE\nVERDICT: <one line>\n\n[A]:\n${(ra.text || "(failed)").slice(-1200)}\n\n[B]:\n${(rb.text || "(failed)").slice(-1200)}` },
+    ], null, 90_000).then(x => x.text || "").catch(() => "");
+    const wLine = (jtext.match(/WINNER:\s*(A|B|TIE)/i)?.[1] || "TIE").toUpperCase();
+    const vLine = jtext.match(/VERDICT:\s*([^\n]+)/i)?.[1]?.trim() || "judge unreachable — read both sides yourself";
+    const side = wLine === "A" ? GRN + "A" : wLine === "B" ? GRN + "B" : YLW + "TIE";
+    for (;;) {
+      splitFrame(` ct002/debate `, ` A · ${model} `, accA, ` B · ${modelB} `, accB, `${side}${RST} wins  ${DIM}· ${vLine}${RST}  ${DIM}enter again · b back · q quit${RST}`);
+      const k = await rawKey();
+      if (k === "quit") process.exit(0);
+      if (k === "b" || k === "\x1b") return;
+      if (k === "enter") return brainSession(mode);
+    }
+  }
   let acc = "";
   const t0 = Date.now();
   const WHEEL = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
