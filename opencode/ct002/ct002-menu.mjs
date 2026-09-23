@@ -36,11 +36,39 @@ const ITEMS = [
   { key: "4", icon: "🩺", label: "DOCTOR",     desc: "which models breathe right now",   kind: "panel", panel: "doctor" },
   { key: "5", icon: "⚔️", label: "ARENA",      desc: "blind chat battle — you vote",     kind: "exec",  run: "chat" },
   { key: "6", icon: "🤖", label: "AGENT WAR",  desc: "agents race on a real task",       kind: "exec",  run: "task" },
-  { key: "7", icon: "🔎", label: "CRITIC",     desc: "tear a topic apart",               kind: "chat",  tpl: "/critic {input}" },
-  { key: "8", icon: "🧠", label: "BRAINSTORM", desc: "safe / wild / insane tiers",       kind: "chat",  tpl: "/brainstorm {input}" },
-  { key: "9", icon: "⚖️", label: "DEBATE",     desc: "critic vs brainstorm, verdict",    kind: "chat",  tpl: "/debate {input}" },
-  { key: "0", icon: "✅", label: "VERIFY",     desc: "run tests, formatted result",      kind: "chat",  tpl: "/verify {input}" },
+  { key: "7", icon: "🔎", label: "CRITIC",     desc: "tear a topic apart, scored",       kind: "brain", mode: "critic" },
+  { key: "8", icon: "🧠", label: "BRAINSTORM", desc: "safe / wild / insane tiers",       kind: "brain", mode: "brainstorm" },
+  { key: "9", icon: "⚖️", label: "DEBATE",     desc: "critic + brainstorm, verdict",     kind: "brain", mode: "debate" },
+  { key: "0", icon: "✅", label: "VERIFY",     desc: "run a command, formatted result",  kind: "verify" },
 ];
+
+// ── brain modes — the deck calls the router ITSELF, no opencode handoff ──
+const MODES = {
+  critic: {
+    title: "critic",
+    sys: `You are CT-002 CRITIC (CodersTeam). Tear the user's topic apart with surgical precision. Output format:
+FINDINGS — 3+ specific findings, each with location + concrete impact
+SCORE — X/100 with one-line justification
+VERDICT — one brutal line
+No preamble. No fluff. Specific or nothing.`,
+  },
+  brainstorm: {
+    title: "brainstorm",
+    sys: `You are CT-002 BRAINSTORM (CodersTeam). Produce exactly 3 solution tiers:
+🟢 SAFE — low effort, low risk (pros/cons/effort)
+🟡 WILD — creative, unexpected (pros/cons/effort)
+🔴 INSANE — extreme, high reward (pros/cons/effort)
+End with VERDICT (one line) + RECOMMENDED PATH. No preamble.`,
+  },
+  debate: {
+    title: "debate",
+    sys: `You are CT-002 DEBATE (CodersTeam). Two passes then a verdict:
+🔴 CRITIC PASS — 3+ specific findings, SCORE X/100
+🟠 BRAINSTORM PASS — safe/wild/insane options
+⚖️ VERDICT — synthesized recommendation, one final line
+No preamble. Compact. Every claim concrete.`,
+  },
+};
 
 // ── router helpers ────────────────────────────────────────────
 function findKey() {
@@ -126,6 +154,81 @@ function runDoctor() {
     try { return execSync(c + " 2>&1", { encoding: "utf8", timeout: 90_000 }); } catch (e) { return e.stdout || String(e); }
   }
   return "ct002-doctor not found — run the ct002-ai installer";
+}
+
+// ── brain engine — stream from the router, persona riding ────
+function loadPersona() {
+  try { return fs.readFileSync(path.join(HOME, ".config/opencode/persona.md"), "utf8").slice(0, 6000); } catch { return ""; }
+}
+async function streamChat(model, messages, onDelta, timeoutMs = 180_000) {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`${UPSTREAM}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(findKey() ? { Authorization: `Bearer ${findKey()}` } : {}) },
+      body: JSON.stringify({ model, messages, stream: true, max_tokens: 2048 }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!r.ok || !r.body) throw new Error(`http ${r.status}`);
+    const dec = new TextDecoder();
+    let buf = "", full = "";
+    for await (const chunk of r.body) {
+      buf += dec.decode(chunk, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith("data:")) continue;
+        const payload = s.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try { const d = JSON.parse(payload)?.choices?.[0]?.delta?.content; if (d) { full += d; onDelta?.(d); } } catch {}
+      }
+    }
+    if (!full.trim()) throw new Error("empty stream");
+    return { text: full, ms: Date.now() - t0, err: null };
+  } catch (e) {
+    try {
+      const r = await fetch(`${UPSTREAM}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(findKey() ? { Authorization: `Bearer ${findKey()}` } : {}) },
+        body: JSON.stringify({ model, messages, max_tokens: 2048 }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const j = await r.json();
+      const text = j?.choices?.[0]?.message?.content || "";
+      if (!text.trim()) throw new Error("empty");
+      onDelta?.(text);
+      return { text, ms: Date.now() - t0, err: null };
+    } catch (e2) { return { text: "", ms: Date.now() - t0, err: String(e?.message || e2?.message) }; }
+  }
+}
+function aliveModels() {
+  try {
+    const out = spawnSync("curl", ["-s", "-m", "6", "-H", `Authorization: Bearer ${findKey()}`, `${UPSTREAM}/v1/models`], { encoding: "utf8" });
+    return (JSON.parse(out.stdout)?.data || []).map(m => m.id).filter(Boolean);
+  } catch { return []; }
+}
+function pickModel(preferred) {
+  if (preferred) return preferred;
+  const env = process.env.CT002_BRAIN_MODEL;
+  if (env) return env;
+  const alive = aliveModels();
+  const pref = alive.find(m => m.includes("my9model")) || alive.find(m => m.includes("big-pickle")) || alive.find(m => m.includes("mimo")) || alive[0];
+  return pref || "my9model-smart";
+}
+
+// wrap text into frame-sized lines for streaming views
+function flowLines(text, w) {
+  const out = [];
+  for (const raw of text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").split("\n")) {
+    let line = "";
+    for (const word of raw.split(" ")) {
+      if ((line + (line ? " " : "") + word).length > w) { out.push(line); line = word.slice(0, w); }
+      else line += (line ? " " : "") + word;
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 // ── compact card (chat-safe, no ansi) ─────────────────────────
@@ -249,12 +352,116 @@ async function runItem(it) {
     try { spawnSync(process.execPath, argv, { stdio: "inherit" }); } catch {}
     process.exit(0);
   }
-  if (it.kind === "chat") {
-    process.stdout.write("\x1b[?1049l\x1b[?25h");
-    const topic = await askLine("topic: ");
-    if (!topic) process.exit(0);
-    try { spawnSync("opencode", [it.tpl.replace("{input}", topic)], { stdio: "inherit" }); } catch {}
-    process.exit(0);
+  if (it.kind === "brain") { await brainSession(it.mode); return; }
+  if (it.kind === "verify") { await verifySession(); return; }
+}
+
+// ── brain session — submenu → model pick → live stream in the frame ──
+async function brainSession(mode) {
+  const m = MODES[mode];
+  frame(` ct002/${m.title} `, [{ s: "  fetching live models…", c: DIM }], `${PB}⏵⏵${RST} ${DIM}b back${RST}`);
+  const models = aliveModels();
+  if (!models.length) {
+    frame(` ct002/${m.title} `, [{ s: `  ✗ router down on ${UPSTREAM} — start it first`, c: RED }], `${PB}⏵⏵${RST} ${DIM}b back${RST}`);
+    await rawKey(); return;
+  }
+  // model submenu
+  let sel = Math.max(0, models.findIndex(x => x.includes("my9model")));
+  for (;;) {
+    const lines = [
+      { s: `  ${PB}${B}pick the brain${RST}  ${DIM}${models.length} live${RST}`, c: "" },
+      { s: "", c: "" },
+      ...models.slice(0, 14).map((mm, i) => ({
+        s: `  ${i === sel ? PB + "▌ ⏵ " : "   "}${mm}${RST}  ${DIM}${i === sel ? "← enter" : ""}${RST}`, c: "",
+      })),
+    ];
+    frame(` ct002/${m.title} `, lines, `${PB}⏵⏵${RST} ${DIM}↑↓ pick · enter go · b back${RST}`);
+    const k = await rawKey();
+    if (k === "quit") process.exit(0);
+    if (k === "b" || k === "\x1b") return;
+    if (k === "up") sel = (sel + Math.min(models.length, 14) - 1) % Math.min(models.length, 14);
+    else if (k === "down") sel = (sel + 1) % Math.min(models.length, 14);
+    else if (k === "enter") break;
+  }
+  const model = models[sel];
+  // topic input
+  frame(` ct002/${m.title} `, [{ s: "  topic → (type, then enter)", c: PB }], `${PB}⏵⏵${RST} ${DIM}empty = back${RST}`);
+  process.stdout.write("\x1b[?25h");
+  const topic = await askLine("");
+  process.stdout.write("\x1b[?25l");
+  if (!topic) return;
+  // live stream
+  const persona = loadPersona();
+  const messages = [
+    ...(persona ? [{ role: "system", content: persona }] : []),
+    { role: "system", content: m.sys },
+    { role: "user", content: topic },
+  ];
+  let acc = "";
+  const draw = () => {
+    const w = process.stdout.columns || 80;
+    const h = process.stdout.rows || 24;
+    const body = flowLines(acc, w - 6).slice(-(h - 6));
+    const lines = [
+      { s: `  ${PB}${B}${m.title}${RST}  ${DIM}· ${model} · ${acc.length} chars${RST}`, c: "" },
+      { s: "", c: "" },
+      ...body.map(s => ({ s: "  " + s, c: "" })),
+    ];
+    frame(` ct002/${m.title} `, lines, `${PB}⏵⏵${RST} ${DIM}streaming…${RST}`);
+  };
+  draw();
+  const r = await streamChat(model, messages, d => { acc += d; draw(); });
+  if (r.err) acc = (acc ? acc + "\n\n" : "") + `✗ stream failed: ${r.err}`;
+  else acc = r.text;
+  const ms = (r.ms / 1000).toFixed(1);
+  // done view
+  for (;;) {
+    draw();
+    const w = process.stdout.columns || 80, h = process.stdout.rows || 24;
+    const scr = [];
+    scr.push(P + `╭─ ct002/${m.title} `.padEnd(w - 1, "─") + "╮" + RST);
+    const body = flowLines(acc, w - 6).slice(-(h - 7));
+    scr.push(P + "│" + RST + paint(`  ${PB}${B}${m.title}${RST}  ${DIM}· ${model} · ${ms}s${RST}`, w - 2) + P + "│" + RST);
+    scr.push(P + "│" + RST + " ".repeat(w - 2) + P + "│" + RST);
+    for (const s of body) scr.push(P + "│" + RST + paint("  " + s, w - 2) + P + "│" + RST);
+    scr.push(P + "╰" + "─".repeat(w - 2) + "╯" + RST);
+    scr.push(` ${PB}⏵⏵${RST} ${DIM}enter again · b back · q quit${RST}`);
+    process.stdout.write(CLR + scr.join("\n") + "\n");
+    const k = await rawKey();
+    if (k === "quit") process.exit(0);
+    if (k === "b" || k === "\x1b") return;
+    if (k === "enter") return brainSession(mode);
+  }
+}
+
+// ── verify session — run a command, show exit/stdout/stderr ──
+async function verifySession() {
+  frame(" ct002/verify ", [{ s: "  command → (type, then enter)", c: PB }], `${PB}⏵⏵${RST} ${DIM}empty = back${RST}`);
+  process.stdout.write("\x1b[?25h");
+  const cmd = await askLine("");
+  process.stdout.write("\x1b[?25l");
+  if (!cmd) return;
+  const t0 = Date.now();
+  let out = "", code = 0, failed = false;
+  try { out = execSync(cmd + " 2>&1", { encoding: "utf8", timeout: 300_000, maxBuffer: 8 * 1024 * 1024 }); }
+  catch (e) { failed = true; code = e.status ?? 1; out = (e.stdout || "") + (e.stderr || ""); }
+  const ms = ((Date.now() - t0) / 1000).toFixed(1);
+  const verdict = failed ? `❌ FAIL (exit ${code})` : "✅ PASS (exit 0)";
+  for (;;) {
+    const w = process.stdout.columns || 80, h = process.stdout.rows || 24;
+    const body = flowLines(out.slice(-6000), w - 6).slice(-(h - 7));
+    const scr = [];
+    scr.push(P + `╭─ ct002/verify `.padEnd(w - 1, "─") + "╮" + RST);
+    scr.push(P + "│" + RST + paint(`  ${verdict}  ${DIM}· ${ms}s · ${cmd.slice(0, w - 40)}${RST}`, w - 2) + P + "│" + RST);
+    scr.push(P + "│" + RST + " ".repeat(w - 2) + P + "│" + RST);
+    for (const s of body) scr.push(P + "│" + RST + paint("  " + s, w - 2) + P + "│" + RST);
+    scr.push(P + "╰" + "─".repeat(w - 2) + "╯" + RST);
+    scr.push(` ${PB}⏵⏵${RST} ${DIM}enter rerun · b back · q quit${RST}`);
+    process.stdout.write(CLR + scr.join("\n") + "\n");
+    const k = await rawKey();
+    if (k === "quit") process.exit(0);
+    if (k === "b" || k === "\x1b") return;
+    if (k === "enter") return verifySession();
   }
 }
 
