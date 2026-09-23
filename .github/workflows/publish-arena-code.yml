@@ -1,0 +1,71 @@
+name: publish-arena-code
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Fetch upstream v1.18.30
+        run: git clone --depth 1 --branch v1.18.30 https://github.com/sst/opencode /tmp/oc
+
+      - name: Apply arena-code patch
+        working-directory: /tmp/oc
+        run: |
+          git apply --check $GITHUB_WORKSPACE/arena-code/arena-code.patch
+          git apply $GITHUB_WORKSPACE/arena-code/arena-code.patch
+
+      - name: Install deps
+        working-directory: /tmp/oc
+        run: bun install
+
+      - name: Build linux-x64 binary
+        working-directory: /tmp/oc/packages/opencode
+        env:
+          OPENCODE_VERSION: 1.18.30
+          OPENCODE_CHANNEL: latest
+        run: bun run build --single --skip-embed-web-ui
+
+      - name: Stage platform package
+        run: |
+          mkdir -p /tmp/stage/bin
+          cp /tmp/oc/packages/opencode/dist/opencode-linux-x64/bin/opencode /tmp/stage/bin/arena
+          chmod +x /tmp/stage/bin/arena
+          cat > /tmp/stage/package.json <<'PKG'
+          {
+            "name": "@pawbxj/arena-cli-linux-x64",
+            "version": "1.1.0",
+            "description": "Arena Code TUI binary for linux-x64 (opencode 1.18.30 base, arena-code session UI baked in)",
+            "os": ["linux"],
+            "cpu": ["x64"],
+            "files": ["bin"],
+            "license": "MIT"
+          }
+          PKG
+
+      - name: Publish platform package
+        working-directory: /tmp/stage
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Publish main shim package
+        working-directory: ${{ github.workspace }}/arena-code/main-pkg
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
