@@ -241,7 +241,8 @@ async function runItem(it) {
     process.stdout.write("\x1b[?1049l");
     const arg = it.run === "ct002-arena -t" ? await askLine("task: ") : "";
     if (it.run === "ct002-arena -t" && !arg) return;
-    const bin = ["ct002-arena", ...(it.run.includes("-t") ? ["-t"] : []), ...(arg ? [arg] : [])];
+    const engine = path.join(path.dirname(new URL(import.meta.url).pathname), "ct002-arena.mjs");
+    const bin = [process.execPath, engine, ...(it.run.includes("-t") ? ["-t"] : []), ...(arg ? [arg] : [])];
     try { spawnSync(bin[0], bin.slice(1), { stdio: "inherit" }); } catch {}
     process.exit(0);
   }
