@@ -218,11 +218,17 @@ TASK: ${task}`;
     });
     const t0 = Date.now();
     let out = "", killed = false;
+    const idx = agentRun.n ?? 0; agentRun.n = (idx + 1) % 2;
+    const act = s => {
+      const m = s.match(/(Read|Edit|Write|Bash|Glob|Grep|Task|fetch)[^\n]{0,40}/i);
+      if (m) T.lastAct[idx] = m[1].slice(0, 44);
+    };
     const timer = setTimeout(() => { killed = true; child.kill("SIGKILL"); }, 900_000);
-    child.stdout.on("data", c => { const s = stripAnsi(c.toString()); out += s; onDelta?.(s); });
-    child.stderr.on("data", c => { const s = stripAnsi(c.toString()); out += s; onDelta?.(s); });
+    child.stdout.on("data", c => { const s = stripAnsi(c.toString()); out += s; act(s); onDelta?.(s); });
+    child.stderr.on("data", c => { const s = stripAnsi(c.toString()); out += s; act(s); onDelta?.(s); });
     child.on("close", code => {
       clearTimeout(timer);
+      T.lastAct[idx] = code === 0 ? "finished" : killed ? "timeout" : `exit ${code}`;
       resolve({ ok: !killed && code === 0, ms: Date.now() - t0, tail: out.slice(-800) });
     });
   });
@@ -236,6 +242,8 @@ const T = {
   layout: "split",
   lastFrame: "",
   resultLine: "",
+  liveMs: [0, 0],         // ticking clock per side while agents grind
+  lastAct: ["", ""],      // last meaningful activity line per side
 };
 const IS_TTY = process.stdout.isTTY && process.stdin.isTTY;
 
@@ -284,7 +292,9 @@ function frame() {
   for (let i = 0; i < 2; i++) {
     const s = T.sides[i] || { buf: "", done: false };
     const body = wrap(s.buf || "…", rects[i].w - 4);
-    const title = ` ${String.fromCharCode(65 + i)} ${T.sides[i]?.ms ? `· ${(T.sides[i].ms / 1000).toFixed(0)}s` : "· typing…"}`;
+    const secs = T.sides[i]?.ms ? (T.sides[i].ms / 1000).toFixed(0) + "s" : ((T.liveMs[i] || 0) / 1000).toFixed(0) + "s";
+    const act = T.lastAct[i] ? ` · ${T.lastAct[i]}` : "";
+    const title = ` ${String.fromCharCode(65 + i)} · ${secs}${T.sides[i]?.done ? " · done" : act}`;
     drawBox(scr, rects[i], title, body, T.sides[i]?.err ? RED : DIM);
   }
   const foot = [];
@@ -305,6 +315,14 @@ function scheduleRender() {
   if (!IS_TTY || renderTimer) return;
   renderTimer = setTimeout(() => { renderTimer = null; frame(); }, 80);
 }
+// heartbeat: clocks tick + panels repaint even with zero output (long agent thinks)
+setInterval(() => {
+  if (!IS_TTY) return;
+  if (T.phase === "streaming") {
+    for (let i = 0; i < 2; i++) if (!T.sides[i]?.done) T.liveMs[i] += 1000;
+    frame();
+  }
+}, 1000);
 
 function printPipe() {
   // non-tty fallback: sequential, readable
