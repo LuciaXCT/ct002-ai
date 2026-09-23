@@ -301,8 +301,9 @@ ok "command → /arena (ctrl+p palette)"
 mkdir -p "$TARGET/ct002"
 cp "$REPO_DIR/opencode/ct002/ct002-menu.mjs"  "$TARGET/ct002/ct002-menu.mjs"
 cp "$REPO_DIR/opencode/ct002/ct002-arena.mjs" "$TARGET/ct002/ct002-arena.mjs"
+[ -f "$REPO_DIR/opencode/ct002/ct002-chat" ] && cp "$REPO_DIR/opencode/ct002/ct002-chat" "$TARGET/ct002/ct002-chat" && chmod +x "$TARGET/ct002/ct002-chat"
 chmod +x "$TARGET/ct002/ct002-menu.mjs" "$TARGET/ct002/ct002-arena.mjs"
-ok "deck → $TARGET/ct002/ (ct002-menu + ct002-arena)"
+ok "deck → $TARGET/ct002/ (ct002-menu + ct002-arena + ct002-chat)"
 
 # retire legacy .jsonc — it loads AFTER .json and shadows the new setup
 for f in "$TARGET/opencode.jsonc"; do
@@ -404,7 +405,9 @@ ln -sf "$TARGET/ct002-serve" "$BIN_DIR/ct002-serve"
 # deck + arena on PATH too (bare names from anywhere)
 ln -sf "$TARGET/ct002/ct002-menu.mjs"  "$BIN_DIR/ct002-menu"
 ln -sf "$TARGET/ct002/ct002-arena.mjs" "$BIN_DIR/ct002-arena"
-printf '%s  deck   → full TUI: ct002-menu · battles: ct002-arena%s\n' "$DM" "$X"
+ln -sf "$TARGET/ct002/ct002-chat"      "$BIN_DIR/ct002"
+ln -sf "$TARGET/ct002/ct002-chat"      "$BIN_DIR/ct002-chat"
+printf '%s  deck   → full TUI: ct002-menu · chat: ct002 (auto-popup) · battles: ct002-arena%s\n' "$DM" "$X"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
 
 # keeping an existing agent? still rename it to the chosen name
