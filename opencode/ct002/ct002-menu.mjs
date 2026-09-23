@@ -257,11 +257,27 @@ async function runItem(it) {
   }
 }
 
+// ── compact card — fits inside a chat viewport, never collapses ──
+function compactCard() {
+  return [
+    "☰ CT-002 CONTROL DECK — CodersTeam",
+    "  1 ☰ menu    2 🏆 board    3 🎯 models   4 🩺 doctor",
+    "  5 ⚔ arena   6 🤖 agents   7 🔎 critic    8 🧠 brainstorm",
+    "  9 ⚖ debate  10 ✅ verify",
+    "",
+    "full TUI → run in terminal:  ct002-menu",
+  ];
+}
+
 // ── one-shot panel mode (for tmux popup one-shots / tests) ────
 const argv = process.argv.slice(2);
 if (argv[0] === "panel") {
   const which = argv[1] || "menu";
   const w = process.stdout.columns || 80;
+  if (which === "compact") {
+    console.log(compactCard().join("\n"));
+    process.exit(0);
+  }
   const lines = which === "board" ? panelBoard(w) : which === "models" ? panelModels(w) : which === "doctor" ? runDoctor().split("\n").map(s => ({ s })) : panelMenu(w);
   const top = `┌─ ct002/${which} `.padEnd(w - 1, "─") + "┐";
   console.log(CYN + top + RST);
