@@ -203,9 +203,13 @@ async function streamChat(model, messages, onDelta, timeoutMs = 180_000) {
   }
 }
 function aliveModels() {
+  // cached for 10s — submenu opens instantly on repeat picks
+  if (aliveModels.cache && Date.now() - aliveModels.cache.at < 10_000) return aliveModels.cache.list;
   try {
     const out = spawnSync("curl", ["-s", "-m", "6", "-H", `Authorization: Bearer ${findKey()}`, `${UPSTREAM}/v1/models`], { encoding: "utf8" });
-    return (JSON.parse(out.stdout)?.data || []).map(m => m.id).filter(Boolean);
+    const list = (JSON.parse(out.stdout)?.data || []).map(m => m.id).filter(Boolean);
+    aliveModels.cache = { at: Date.now(), list };
+    return list;
   } catch { return []; }
 }
 function pickModel(preferred) {
@@ -351,7 +355,9 @@ async function runItem(it) {
     if (it.run === "task" && !arg) process.exit(0);
     const engine = path.join(path.dirname(SELF), "ct002-arena.mjs");
     const argv = [engine, ...(it.run === "task" ? ["-t", arg] : [])];
+    process.stdout.write(`${DIM}⏵⏵ waking the arena engine…${RST}\r`);
     try { spawnSync(process.execPath, argv, { stdio: "inherit" }); } catch {}
+    process.stdout.write("\x1b[2K\r");
     process.exit(0);
   }
   if (it.kind === "brain") { await brainSession(it.mode); return; }
@@ -361,8 +367,17 @@ async function runItem(it) {
 // ── brain session — submenu → model pick → live stream in the frame ──
 async function brainSession(mode) {
   const m = MODES[mode];
-  frame(` ct002/${m.title} `, [{ s: "  fetching live models…", c: DIM }], `${PB}⏵⏵${RST} ${DIM}b back${RST}`);
-  const models = aliveModels();
+  const WHEEL2 = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let wi = 0;
+  // animated fetch — never a dead frame while models load
+  const loadFrame = () => frame(` ct002/${m.title} `, [{ s: `  ${WHEEL2[wi++ % 10]} fetching live models…`, c: DIM }], `${PB}⏵⏵${RST} ${DIM}b back${RST}`);
+  loadFrame();
+  await new Promise(r => setTimeout(r, 30)); // let the first frame paint
+  const models = await new Promise(res => {
+    const t = setTimeout(() => res([]), 6500);
+    setImmediate(() => { res(aliveModels()); });
+    clearTimeout(t);
+  });
   if (!models.length) {
     frame(` ct002/${m.title} `, [{ s: `  ✗ router down on ${UPSTREAM} — start it first`, c: RED }], `${PB}⏵⏵${RST} ${DIM}b back${RST}`);
     await rawKey(); return;
