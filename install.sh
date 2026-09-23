@@ -426,7 +426,10 @@ for RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
   printf '\n%s\n' "$HOOK_SNIPPET" >> "$RC"
   RC_FILES="$RC_FILES $RC"
 done
-[ -n "$RC_FILES" ] && ok "shell hook → plain 'opencode' now auto-wraps (opt-out: OPENCODE_RAW=1 opencode)" && warn "added to:$RC_FILES — restart shell or: source ~/.bashrc"
+if [ -n "$RC_FILES" ]; then
+  ok "shell hook → plain 'opencode' now auto-wraps (opt-out: OPENCODE_RAW=1 opencode)"
+  warn "added to:$RC_FILES — restart the terminal (or: exec zsh / exec bash)"
+fi
 
 # keeping an existing agent? still rename it to the chosen name
 if [ "$INSTALL_AGENT" = false ]; then
