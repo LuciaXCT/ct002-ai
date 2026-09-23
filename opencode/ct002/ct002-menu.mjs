@@ -160,14 +160,16 @@ function runDoctor() {
 function loadPersona() {
   try { return fs.readFileSync(path.join(HOME, ".config/opencode/persona.md"), "utf8").slice(0, 6000); } catch { return ""; }
 }
-async function streamChat(model, messages, onDelta, timeoutMs = 180_000) {
+async function streamChat(model, messages, onDelta, timeoutMs = 180_000, extSignal = null) {
   const t0 = Date.now();
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = extSignal ? AbortSignal.any([timeout, extSignal]) : timeout;
   try {
     const r = await fetch(`${UPSTREAM}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(findKey() ? { Authorization: `Bearer ${findKey()}` } : {}) },
       body: JSON.stringify({ model, messages, stream: true, max_tokens: 2048 }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
     if (!r.ok || !r.body) throw new Error(`http ${r.status}`);
     const dec = new TextDecoder();
@@ -184,9 +186,11 @@ async function streamChat(model, messages, onDelta, timeoutMs = 180_000) {
         try { const d = JSON.parse(payload)?.choices?.[0]?.delta?.content; if (d) { full += d; onDelta?.(d); } } catch {}
       }
     }
+    if (extSignal?.aborted) return { text: "", ms: Date.now() - t0, err: "aborted", aborted: true };
     if (!full.trim()) throw new Error("empty stream");
     return { text: full, ms: Date.now() - t0, err: null };
   } catch (e) {
+    if (extSignal?.aborted || e?.name === "AbortError") return { text: "", ms: Date.now() - t0, err: "aborted", aborted: true };
     try {
       const r = await fetch(`${UPSTREAM}/v1/chat/completions`, {
         method: "POST",
@@ -457,10 +461,22 @@ async function brainSession(mode) {
   const startTicker = () => { ticker = setInterval(() => { if (acc) draw(); }, 120); };
   const stopTicker = () => { if (ticker) { clearInterval(ticker); ticker = null; } };
   startTicker();
-  const r = await streamChat(model, messages, d => { acc += d; draw(); });
+  // esc aborts the stream mid-flight — promised by the footer, now real
+  const abort = new AbortController();
+  const escWatch = (async () => {
+    process.stdin.setRawMode(true); process.stdin.resume();
+    for (;;) {
+      const ch = await new Promise(res => { const f = d => { process.stdin.removeListener("data", f); res(d.toString()); }; process.stdin.on("data", f); });
+      if (ch === "\x1b" || ch === "\x03") { abort.abort(); break; }
+    }
+  })();
+  const r = await streamChat(model, messages, d => { acc += d; draw(); }, 180_000, abort.signal);
   stopTicker();
-  if (r.err) acc = (acc ? acc + "\n\n" : "") + `✗ stream failed: ${r.err}`;
+  if (r.aborted) {
+    acc = (acc ? acc + "\n\n" : "") + `${YLW}⏵⏵ aborted${RST}`;
+  } else if (r.err) acc = (acc ? acc + "\n\n" : "") + `✗ stream failed: ${r.err}`;
   else acc = r.text;
+  escWatch.catch(() => {});
   const ms = (r.ms / 1000).toFixed(1);
   const finalTok = tok();
   const avgTps = r.ms > 500 ? (finalTok / (r.ms / 1000)).toFixed(1) : null;
@@ -516,7 +532,9 @@ async function verifySession() {
   }
 }
 
-// ── launch: interactive deck when we own the screen, card when piped ──
+// ── launch: popup inside tmux, card otherwise — NEVER interactive here ──
+// (launch is what /arena runs INSIDE opencode; going interactive would fight
+// opencode for the keyboard. bare-terminal users run `ct002-menu` instead.)
 function launch() {
   if (process.env.TMUX) {
     try {
@@ -525,11 +543,6 @@ function launch() {
     } catch {
       console.log(compactCard().join("\n"));
     }
-    return;
-  }
-  // real terminal, no tmux: the deck IS usable directly (arrows work)
-  if (process.stdin.isTTY && process.stdout.isTTY) {
-    interactive().catch(e => { console.error(e); process.exit(1); });
     return;
   }
   console.log(compactCard().join("\n"));

@@ -457,12 +457,25 @@ async function agentBattle(task) {
   T.phase = "streaming"; T.resultLine = "";
   if (IS_TTY) frame(); else console.log(`task: ${task}\ncwd:  ${CWD}\n`);
 
+  // esc aborts the whole race — kills both agents, no adoption, no elo
+  const abortRace = new AbortController();
+  const watchEsc = (async () => {
+    if (!process.stdin.isTTY || process.stdin.readable === false) return;
+    process.stdin.setRawMode(true); process.stdin.resume();
+    for (;;) {
+      const ch = await new Promise(res => { const f = d => { process.stdin.removeListener("data", f); res(d.toString()); }; process.stdin.on("data", f); });
+      if (ch === "\x1b" || ch === "\x03") { abortRace.abort(); process.exit(130); }
+    }
+  })();
+  watchEsc.catch(() => {});
+
   const jobs = [0, 1].map(i =>
     agentRun(T.pair[i], task, dirs[i], d => {
       T.sides[i].buf += d;
       if (T.sides[i].buf.length > 9000) T.sides[i].buf = T.sides[i].buf.slice(-6000);
       scheduleRender();
     }).then(async r => {
+      if (abortRace.signal.aborted) process.exit(130);
       const stat = gitStat(dirs[i]);
       T.sides[i] = {
         ...T.sides[i], done: true, ms: r.ms,
