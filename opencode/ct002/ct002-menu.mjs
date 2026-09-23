@@ -398,22 +398,40 @@ async function brainSession(mode) {
     { role: "user", content: topic },
   ];
   let acc = "";
+  const t0 = Date.now();
+  const WHEEL = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let wheelI = 0;
+  // ~4 chars/token for english prose — good enough for a live counter
+  const tok = () => Math.round(acc.length / 4);
+  const tps = () => { const s = (Date.now() - t0) / 1000; return s > 0.4 ? (tok() / s).toFixed(1) : null; };
+  const secs = () => ((Date.now() - t0) / 1000).toFixed(1);
+  const streamFooter = () => {
+    const rate = tps();
+    return `${PB}${WHEEL[wheelI++ % WHEEL.length]}${RST} ${B}${model}${RST}  ${DIM}·${RST} ${PB}${tok()} tok${RST} ${DIM}· ${rate ? rate + " tok/s · " : ""}${secs()}s · esc abort${RST}`;
+  };
   const draw = () => {
     const w = process.stdout.columns || 80;
     const h = process.stdout.rows || 24;
     const body = flowLines(acc, w - 6).slice(-(h - 6));
     const lines = [
-      { s: `  ${PB}${B}${m.title}${RST}  ${DIM}· ${model} · ${acc.length} chars${RST}`, c: "" },
+      { s: `  ${PB}${B}${m.title}${RST}  ${DIM}· ${model}${RST}`, c: "" },
       { s: "", c: "" },
       ...body.map(s => ({ s: "  " + s, c: "" })),
     ];
-    frame(` ct002/${m.title} `, lines, `${PB}⏵⏵${RST} ${DIM}streaming…${RST}`);
+    frame(` ct002/${m.title} `, lines, streamFooter());
   };
-  draw();
+  // footer ticks even between deltas — wheel + clock never stall
+  let ticker = null;
+  const startTicker = () => { ticker = setInterval(() => { if (acc) draw(); }, 120); };
+  const stopTicker = () => { if (ticker) { clearInterval(ticker); ticker = null; } };
+  startTicker();
   const r = await streamChat(model, messages, d => { acc += d; draw(); });
+  stopTicker();
   if (r.err) acc = (acc ? acc + "\n\n" : "") + `✗ stream failed: ${r.err}`;
   else acc = r.text;
   const ms = (r.ms / 1000).toFixed(1);
+  const finalTok = tok();
+  const avgTps = r.ms > 500 ? (finalTok / (r.ms / 1000)).toFixed(1) : null;
   // done view
   for (;;) {
     draw();
@@ -421,7 +439,8 @@ async function brainSession(mode) {
     const scr = [];
     scr.push(P + `╭─ ct002/${m.title} `.padEnd(w - 1, "─") + "╮" + RST);
     const body = flowLines(acc, w - 6).slice(-(h - 7));
-    scr.push(P + "│" + RST + paint(`  ${PB}${B}${m.title}${RST}  ${DIM}· ${model} · ${ms}s${RST}`, w - 2) + P + "│" + RST);
+    scr.push(P + "│" + RST + paint(`  ${PB}${B}${m.title}${RST}  ${DIM}· ${model}${RST}`, w - 2) + P + "│" + RST);
+    scr.push(P + "│" + RST + paint(`  ${GRN}✓ done${RST}  ${PB}${finalTok} tok${RST} ${DIM}· ${avgTps ? avgTps + " tok/s avg · " : ""}${ms}s${RST}`, w - 2) + P + "│" + RST);
     scr.push(P + "│" + RST + " ".repeat(w - 2) + P + "│" + RST);
     for (const s of body) scr.push(P + "│" + RST + paint("  " + s, w - 2) + P + "│" + RST);
     scr.push(P + "╰" + "─".repeat(w - 2) + "╯" + RST);
