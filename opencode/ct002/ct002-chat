@@ -13,19 +13,19 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # already inside tmux → just launch opencode, popup works natively
 if [ -n "${TMUX:-}" ]; then
-  exec opencode
+  exec opencode "$@"
 fi
 
 # no tmux binary → plain opencode (card fallback for /arena)
 if ! have tmux; then
-  exec opencode
+  exec opencode "$@"
 fi
 
 # private session named after the tty — parallel windows never collide
-SESSION="ct002-$(tty | sed 's|/dev/||; s|/|­|g')"
+SESSION="ct002-$(tty | sed 's|/dev/||; s|/|-|g')"
 
 # kill a stale session from a dead tty with the same name
 tmux has-session -t "$SESSION" 2>/dev/null && tmux kill-session -t "$SESSION"
 
 # auto-detach other clients, create, attach — one command, feels native
-exec tmux new-session -A -s "$SESSION" opencode
+exec tmux new-session -A -s "$SESSION" opencode "$@"

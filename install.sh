@@ -410,6 +410,24 @@ ln -sf "$TARGET/ct002/ct002-chat"      "$BIN_DIR/ct002-chat"
 printf '%s  deck   → full TUI: ct002-menu · chat: ct002 (auto-popup) · battles: ct002-arena%s\n' "$DM" "$X"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
 
+# shell hook — plain `opencode` gains the popup wrap (opt-out with OPENCODE_RAW=1)
+HOOK_SNIPPET='# CT-002: plain `opencode` boots inside its own tmux session so /arena popup always works
+opencode() {
+  if [ -n "${TMUX:-}" ] || [ "${OPENCODE_RAW:-}" = "1" ] || ! command -v tmux >/dev/null 2>&1; then
+    command opencode "$@"
+  else
+    "$HOME/.config/opencode/ct002/ct002-chat" "$@"
+  fi
+}'
+RC_FILES=""
+for RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ -f "$RC" ] || continue
+  grep -q "CT-002: plain .opencode. boots" "$RC" 2>/dev/null && continue
+  printf '\n%s\n' "$HOOK_SNIPPET" >> "$RC"
+  RC_FILES="$RC_FILES $RC"
+done
+[ -n "$RC_FILES" ] && ok "shell hook → plain 'opencode' now auto-wraps (opt-out: OPENCODE_RAW=1 opencode)" && warn "added to:$RC_FILES — restart shell or: source ~/.bashrc"
+
 # keeping an existing agent? still rename it to the chosen name
 if [ "$INSTALL_AGENT" = false ]; then
   "$TARGET/ct002-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"
