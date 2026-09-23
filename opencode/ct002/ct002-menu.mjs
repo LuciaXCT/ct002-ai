@@ -350,15 +350,30 @@ async function runItem(it) {
     return;
   }
   if (it.kind === "exec") {
-    process.stdout.write("\x1b[?1049l\x1b[?25h");
     const arg = it.run === "task" ? await askLine("task: ") : "";
-    if (it.run === "task" && !arg) process.exit(0);
+    if (it.run === "task" && !arg) return;
     const engine = path.join(path.dirname(SELF), "ct002-arena.mjs");
-    const argv = [engine, ...(it.run === "task" ? ["-t", arg] : [])];
-    process.stdout.write(`${DIM}⏵⏵ waking the arena engine…${RST}\r`);
-    try { spawnSync(process.execPath, argv, { stdio: "inherit" }); } catch {}
-    process.stdout.write("\x1b[2K\r");
-    process.exit(0);
+    // ARENA_AUTO=1 → engine skips vote keys and prints a judged result.
+    // REQUIRED when embedded inside opencode: stdin belongs to the main TUI
+    // (ctrl+p / arrows must keep working there), so no interactive vote.
+    const argv = [engine, ...(it.run === "task" ? ["-t", arg] : []), "--auto"];
+    const doRun = async () => {
+      // detached child: prints through our stdout, never touches our stdin
+      const { spawn } = await import("node:child_process");
+      await new Promise(res => {
+        const c = spawn(process.execPath, argv, { stdio: ["ignore", "inherit", "inherit"] });
+        c.on("close", res); c.on("error", res);
+      });
+    };
+    if (process.env.TMUX) {
+      // popup owns the screen AND the keyboard → full interactive battle
+      try { execSync(`tmux display-popup -w 96% -h 92% -E "ARENA_AUTO= node '${engine}' ${it.run === "task" ? "-t '" + arg.replace(/'/g, "'\\\'" + "'") + "'" : ""}"`, { stdio: "inherit" }); }
+      catch { await doRun(); }
+    } else {
+      process.stdout.write(`${DIM}⏵⏵ battle running below — results stream here, keys stay free${RST}\r\n`);
+      await doRun();
+    }
+    return;
   }
   if (it.kind === "brain") { await brainSession(it.mode); return; }
   if (it.kind === "verify") { await verifySession(); return; }

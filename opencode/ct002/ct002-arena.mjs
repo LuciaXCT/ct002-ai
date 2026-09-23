@@ -27,6 +27,14 @@ const ROSTER = (process.env.ARENA_FIGHTERS ||
   "oc/big-pickle,oc/nemotron-3-ultra-free,oc/mimo-v2.5-free,my9model-smart,opencode-free")
   .split(",").map(s => s.trim()).filter(Boolean);
 
+function pickModel() {
+  const env = process.env.CT002_BRAIN_MODEL;
+  if (env) return env;
+  const j = process.env.ARENA_JUDGE;
+  if (j) return j;
+  return ROSTER.includes("my9model-smart") ? "my9model-smart" : ROSTER[0];
+}
+
 function findKey() {
   if (process.env.ARENA_KEY) return process.env.ARENA_KEY;
   for (const p of [
@@ -53,6 +61,10 @@ function loadPersona() {
 // ---------------- args ----------------
 const argv = process.argv.slice(2);
 if (argv.includes("--version") || argv.includes("-v")) { console.log("arena-tui " + VERSION); process.exit(0); }
+// --auto: embedded mode (deck inside opencode) — stdin is NOT ours, so skip
+// interactive voting and let a judge model pick the winner
+const AUTO = argv.includes("--auto");
+if (AUTO) { process.env.ARENA_AUTO = "1"; }
 
 const TASK_MODE = argv.includes("-t") || argv.includes("--task");
 const cwdIdx = argv.indexOf("--cwd");
@@ -357,7 +369,23 @@ function askLine(q) {
   });
 }
 
+async function judgeVote() {
+  // embedded: no keyboard — ask a judge model to pick
+  const jmodel = pickModel();
+  const body = `Two anonymous answers to the same prompt. Reply with EXACTLY one letter: A, B, or T (tie).
+
+[A]:
+${(T.sides[0]?.buf || "(failed)").slice(-1500)}
+
+[B]:
+${(T.sides[1]?.buf || "(failed)").slice(-1500)}`;
+  const r = await streamChat(jmodel, [{ role: "user", content: body }], null, 60_000).catch(() => null);
+  const v = (r?.text || "").trim().toUpperCase()[0];
+  return "ABT".includes(v) ? v.toLowerCase() : "t";
+}
+
 async function getVote() {
+  if (AUTO) return judgeVote();
   if (!IS_TTY) {
     const a = await askLine("your vote [A/B/T/S/R]: ");
     return (a[0] || "t").toLowerCase();
@@ -491,7 +519,7 @@ async function main() {
     } catch (e) {
       console.error(`${RED}battle error: ${e?.message || e}${RST}`);
     }
-    if (IS_TTY) {
+    if (IS_TTY && !AUTO) {
       T.phase = "done";
       current = await askLine(`\n${CYN}arena>${RST} `);
     } else break;
