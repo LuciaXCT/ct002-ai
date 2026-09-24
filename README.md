@@ -55,6 +55,25 @@ opencode
 - Keep 9router running separately on `:20128`
 - Headless is fine — TUI works over SSH
 
+### SSH access
+```bash
+# from your laptop
+ssh user@your-vps-ip
+
+# keep it alive inside tmux
+tmux new -s ct002
+cd ~/ct002-ai
+opencode
+```
+
+**Detach:** `Ctrl+B`, then `D`  
+**Reattach:** `tmux attach -t ct002`  
+**Raw no-tty:** `OPENCODE_RAW=1 opencode`  
+**Headless fallback:** pipe a prompt instead of using the TUI:
+```bash
+echo "fix the bug" | opencode
+```
+
 ---
 
 ## Free Models (rotate in TUI)
