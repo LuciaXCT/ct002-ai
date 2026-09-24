@@ -33,6 +33,28 @@ termux-wake-lock && opencode
 - `termux-notification` — get notifications from background tasks
 - `pkg install termux-api` — clipboard, toasts, sensors
 
+### VPS / Linux server (Ubuntu, Debian, CentOS, etc.)
+```bash
+# 1) install deps
+sudo apt update && sudo apt install -y git curl bun
+
+# 2) clone
+git clone https://github.com/LuciaXCT/ct002-ai.git
+cd ct002-ai
+
+# 3) install
+bash install.sh
+
+# 4) run
+opencode
+```
+
+**VPS notes:**
+- Run inside `tmux` or `screen` so sessions survive SSH drops
+- If no TTY, set `OPENCODE_RAW=1`
+- Keep 9router running separately on `:20128`
+- Headless is fine — TUI works over SSH
+
 ---
 
 ## Free Models (rotate in TUI)
