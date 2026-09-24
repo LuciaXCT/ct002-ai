@@ -227,10 +227,11 @@ case "$MODE" in
       printf '%s  (dashboard → Keys page → copy)%s\n' "$DM" "$X"
       read -rs -p "  key: " API_KEY; echo
     fi
-    [ -z "$API_KEY" ] && err "no key — config will keep the placeholder; edit $TARGET/opencode.json later"
+    [ -z "$API_KEY" ] && warn "no key — config will keep placeholder; edit $TARGET/opencode.json later"
     ;;
   2)
     step "4/6" "Remote router"
+    printf '%s  VPS? use http://localhost:20128 or http://<VPS_IP>:20128%s\n' "$DM" "$X"
     printf '? router base URL %s[http://localhost:20128]%s: ' "$DM" "$X"
     read -r ROUTER_URL || ROUTER_URL=""
     ROUTER_URL=${ROUTER_URL:-http://localhost:20128}
@@ -238,11 +239,19 @@ case "$MODE" in
       ok "router reachable: $ROUTER_URL"
     else
       warn "router not reachable right now (firewall? wrong IP? router down?)"
-      ask_yn "continue anyway?" N || exit 1
+      if ! ask_yn "continue anyway?" N; then
+        err "aborted — start 9router first: 9router --no-browser"; exit 1
+      fi
     fi
     step "5/6" "API key"
-    printf '%s  on the router machine: open %s → Keys → copy key%s\n' "$DM" "$ROUTER_URL" "$X"
-    read -rs -p "  paste sk-... key (input hidden): " API_KEY; echo
+    printf '%s  paste your sk-... key from the 9router Keys page%s\n' "$DM" "$X"
+    if [ -n "$ROUTER_URL" ]; then
+      printf '%s  (%s → Keys)%s\n' "$DM" "$ROUTER_URL" "$X"
+    fi
+    read -rs -p "  key: " API_KEY; echo
+    if [ -z "$API_KEY" ]; then
+      warn "no key entered — $TARGET/opencode.json keeps placeholder; edit it before first run"
+    fi
     ;;
   3)
     step "4/6" "Skip router setup"

@@ -4,7 +4,48 @@ Unfiltered offensive security AI for opencode. All free models from 9router. Sup
 
 ---
 
+## Requirements
+
+- `opencode` binary
+- **9router** running on the VPS itself at `http://<VPS_IP>:20128`
+  - Install it on the VPS
+  - Set its initial password during first-run setup
+  - Get the API key from 9router → Keys page
+  - `opencode.json` must point to the VPS’s own `:20128` endpoint and include that key
+
 ## Install
+
+### VPS / Linux server (recommended)
+```bash
+# 1) install deps
+sudo apt update && sudo apt install -y git curl bun
+
+# 2) clone
+git clone https://github.com/LuciaXCT/ct002-ai.git
+cd ct002-ai
+
+# 3) install 9router on this VPS and set its initial password
+npm install -g 9router
+9router --no-browser
+
+# 4) note the VPS IP and port, e.g. http://$(curl -s ifconfig.me):20128
+#    open that URL, complete 9router first-run password setup,
+#    then copy the API key from Keys page.
+
+# 5) run installer and choose mode 2 (connect)
+bash install.sh
+# → router URL: http://<VPS_IP>:20128
+# → paste the API key when prompted
+
+# 6) run
+opencode
+```
+
+**VPS notes:**
+- Run inside `tmux` or `screen` so sessions survive SSH drops
+- If no TTY, set `OPENCODE_RAW=1`
+- 9router must stay running on `:20128`
+- Headless is fine — TUI works over SSH
 
 ### Linux / macOS
 ```bash
@@ -33,27 +74,37 @@ termux-wake-lock && opencode
 - `termux-notification` — get notifications from background tasks
 - `pkg install termux-api` — clipboard, toasts, sensors
 
-### VPS / Linux server (Ubuntu, Debian, CentOS, etc.)
+### VPS / Linux server (recommended)
 ```bash
 # 1) install deps
 sudo apt update && sudo apt install -y git curl bun
 
-# 2) clone
+# 2) install 9router on the VPS and set its initial password
+npm install -g 9router
+9router --no-browser
+# → open http://localhost:20128 in a browser
+# → complete first-run password setup
+# → copy the API key from Keys page
+
+# 3) clone CT-002
 git clone https://github.com/LuciaXCT/ct002-ai.git
 cd ct002-ai
 
-# 3) install
+# 4) run installer, choose mode 2 (connect)
 bash install.sh
+# → router URL: http://localhost:20128
+# → paste the API key you copied
 
-# 4) run
+# 5) run
 opencode
 ```
 
 **VPS notes:**
 - Run inside `tmux` or `screen` so sessions survive SSH drops
 - If no TTY, set `OPENCODE_RAW=1`
-- Keep 9router running separately on `:20128`
+- 9router must stay running on `:20128`
 - Headless is fine — TUI works over SSH
+- For remote access, use `http://<VPS_IP>:20128` instead of localhost
 
 ### SSH access
 ```bash
@@ -72,6 +123,18 @@ opencode
 **Headless fallback:** pipe a prompt instead of using the TUI:
 ```bash
 echo "fix the bug" | opencode
+```
+
+**SSH + 9router on VPS:**
+```bash
+# on VPS, first run 9router and set its password
+npm install -g 9router
+9router --no-browser
+# open http://<VPS_IP>:20128, set password, copy API key
+
+# then install CT-002
+bash install.sh
+# mode 2 → http://<VPS_IP>:20128 → paste key
 ```
 
 ---

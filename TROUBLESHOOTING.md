@@ -117,6 +117,15 @@ into `$PREFIX/bin` (Termux) or `~/.local/bin` (everything else).
 
 ## 8. Router not answering / `curl: (7) Failed to connect` on :20128
 
+**First run on VPS?** 9router needs its initial password set before it serves API keys.
+
+```bash
+# on VPS, in tmux/screen
+9router --no-browser
+# open http://localhost:20128, set password, copy API key from Keys page
+# then rerun installer or edit ~/.config/opencode/opencode.json manually
+```
+
 **Android freezes/kills Termux background processes** — usually 3-5s after you switch apps
 (that "stuck after opening the dashboard" feeling = Android pausing Termux the moment you left it).
 
