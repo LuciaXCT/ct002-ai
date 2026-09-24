@@ -113,32 +113,7 @@ Everything else ships.
 
 ---
 
-## Arena in the TUI — `/arena` command ⚔️
 
-After the installer runs, ctrl+p inside opencode has an **arena** command. Type a task, hit enter — 3 agents race on it in isolated copies, a judge picks the winner, and the winner's files are stamped into your project automatically:
-
-```
-ctrl+p → arena → "add dark mode to the settings page"
-```
-
-Requires `node ~/arena-battle/arena-agent.mjs` (installed by `install.sh`) and 9router on :20128.
-
-## Arena Mode — models battle for the best answer ⚔️
-
-Optional. Every prompt gets answered by **multiple models in parallel**, then a judge picks the winner — the arena.ai "versus" thinking, self-hosted.
-
-```bash
-node ~/ct002-ai/arena-battle/serve.mjs &        # gateway on :20129 (needs 9router on :20128)
-opencode                                        # ctrl+p → pick arena/arena/battle
-```
-
-| model | meaning |
-|---|---|
-| `arena/arena/battle` | all fighters answer in parallel, judged, winner returned |
-| `arena/arena/battle-2` | quick duel — 2 models, judged |
-| `arena/arena/consensus` | 4 models, judged |
-
-Every answer carries a footer: who fought, who won, judge scores. Tune the roster: `ARENA_FIGHTERS="model-a,model-b" ARENA_JUDGE=model-c node serve.mjs`.
 
 ## Something broke?
 

@@ -292,18 +292,7 @@ done
 cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json"
 ok "config → $TARGET/opencode.json"
 
-# /arena command — opens the CT-002 deck (tmux popup / pre-drawn panel)
-mkdir -p "$TARGET/command"
-cp "$REPO_DIR/opencode/command/arena.md" "$TARGET/command/arena.md"
-ok "command → /arena (ctrl+p palette)"
-
-# the CT-002 dir inside opencode config — deck + battle engine live HERE
-mkdir -p "$TARGET/ct002"
-cp "$REPO_DIR/opencode/ct002/ct002-menu.mjs"  "$TARGET/ct002/ct002-menu.mjs"
-cp "$REPO_DIR/opencode/ct002/ct002-arena.mjs" "$TARGET/ct002/ct002-arena.mjs"
-[ -f "$REPO_DIR/opencode/ct002/ct002-chat" ] && cp "$REPO_DIR/opencode/ct002/ct002-chat" "$TARGET/ct002/ct002-chat" && chmod +x "$TARGET/ct002/ct002-chat"
-chmod +x "$TARGET/ct002/ct002-menu.mjs" "$TARGET/ct002/ct002-arena.mjs"
-ok "deck → $TARGET/ct002/ (ct002-menu + ct002-arena + ct002-chat)"
+# plain opencode + CT-002 only
 
 # retire legacy .jsonc — it loads AFTER .json and shadows the new setup
 for f in "$TARGET/opencode.jsonc"; do
@@ -402,21 +391,18 @@ ln -sf "$TARGET/ct002-doctor" "$BIN_DIR/ct002-doctor"
 ln -sf "$TARGET/ct002-name" "$BIN_DIR/ct002-name"
 ln -sf "$TARGET/ct002-serve" "$BIN_DIR/ct002-serve"
 
-# deck + arena on PATH too (bare names from anywhere)
+# deck on PATH too (bare names from anywhere)
 ln -sf "$TARGET/ct002/ct002-menu.mjs"  "$BIN_DIR/ct002-menu"
-ln -sf "$TARGET/ct002/ct002-arena.mjs" "$BIN_DIR/ct002-arena"
-ln -sf "$TARGET/ct002/ct002-chat"      "$BIN_DIR/ct002"
-ln -sf "$TARGET/ct002/ct002-chat"      "$BIN_DIR/ct002-chat"
-printf '%s  deck   → full TUI: ct002-menu · chat: ct002 (auto-popup) · battles: ct002-arena%s\n' "$DM" "$X"
+printf '%s  deck   → full TUI: ct002-menu%s\n' "$DM" "$X"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
 
-# shell hook — plain `opencode` gains the popup wrap (opt-out with OPENCODE_RAW=1)
-HOOK_SNIPPET='# CT-002: plain `opencode` boots inside its own tmux session so /arena popup always works
+# shell hook — plain `opencode` boots cleanly
+HOOK_SNIPPET='# CT-002: plain `opencode` wrapper
 opencode() {
   if [ -n "${TMUX:-}" ] || [ "${OPENCODE_RAW:-}" = "1" ] || ! command -v tmux >/dev/null 2>&1; then
     command opencode "$@"
   else
-    "$HOME/.config/opencode/ct002/ct002-chat" "$@"
+    command opencode "$@"
   fi
 }'
 RC_FILES=""
