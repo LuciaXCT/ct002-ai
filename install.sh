@@ -294,7 +294,7 @@ fi
 
 # ─── apply ──────────────────────────────────────────────────
 step "6/6" "Applying"
-for f in opencode.json opencode.jsonc; do
+for f in opencode.json opencode.jsonc config.json; do
   [ -f "$TARGET/$f" ] && cp "$TARGET/$f" "$TARGET/$f.bak.$(date +%s)" && warn "backed up: $f"
 done
 
@@ -303,10 +303,22 @@ ok "config → $TARGET/opencode.json"
 
 # plain opencode + CT-002 only
 
-# retire legacy .jsonc — it loads AFTER .json and shadows the new setup
-for f in "$TARGET/opencode.jsonc"; do
-  [ -f "$f" ] && mv "$f" "$f.retired.$(date +%s)" && warn "retired old opencode.jsonc (its agents were shadowing CT-002)"
+# Retire legacy configs. .jsonc loads AFTER .json and shadows the new setup;
+# config.json is an even older filename opencode still reads, and a flat
+# provider entry there (baseURL/apiKey at provider top level instead of under
+# provider.<id>.options) fails validation for the whole config — which shows up
+# as "Unrecognized keys" or as a provider that reports invalid credentials.
+RETIRED_LEGACY=""
+for f in "$TARGET/opencode.jsonc" "$TARGET/config.json"; do
+  [ -f "$f" ] || continue
+  if mv "$f" "$f.retired.$(date +%s)"; then
+    RETIRED_LEGACY="$RETIRED_LEGACY $(basename "$f")"
+    warn "retired legacy $(basename "$f") — it was shadowing your config (backup kept)"
+  fi
 done
+if [ -n "$RETIRED_LEGACY" ]; then
+  warn "provider keys from:$RETIRED_LEGACY belong at provider.<id>.options in opencode.json"
+fi
 
 if [ "$INSTALL_AGENT" = true ]; then
   cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agent/ct002.md"
@@ -348,9 +360,10 @@ else
   ok "auto-rotate OFF — pinned to big-pickle (switch models with m)"
 fi
 
-# retire legacy jsonc BEFORE final validation — it shadows the new config
-for f in "$TARGET/opencode.jsonc"; do
-  [ -f "$f" ] && mv "$f" "$f.retired.$(date +%s)" && warn "retired old opencode.jsonc (shadowing CT-002)"
+# retire legacy configs BEFORE final validation — they shadow the new config
+for f in "$TARGET/opencode.jsonc" "$TARGET/config.json"; do
+  [ -f "$f" ] || continue
+  mv "$f" "$f.retired.$(date +%s)" && warn "retired legacy $(basename "$f") (shadowing CT-002)"
 done
 
 # bake the name into the agent files (trigger words + addressing)

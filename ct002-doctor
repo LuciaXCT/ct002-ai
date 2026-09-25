@@ -34,6 +34,20 @@ if (!cfg) {
   process.exit(1);
 }
 
+// Legacy filenames opencode still reads — a flat provider entry in one of these
+// (baseURL/apiKey at the provider top level) fails validation for the entire
+// config, which surfaces as "Unrecognized keys" or as invalid-credential errors.
+const LEGACY = [
+  HOME + '/.config/opencode/config.json',
+  HOME + '/.config/opencode/opencode.jsonc',
+];
+const legacyShadows = LEGACY.filter((p) => fs.existsSync(p) && !p.startsWith(CFG));
+if (legacyShadows.length) {
+  console.log('  ! legacy config present: ' + legacyShadows.join(', '));
+  console.log('    opencode reads it too — retire it if providers misbehave:');
+  console.log('    mv <file> <file>.retired');
+}
+
 const prov = cfg.provider?.ct002;
 if (!prov) {
   console.log('✗ no ct002 provider in config — run the installer');
@@ -60,8 +74,15 @@ async function probe(model) {
     const body = await r.json().catch(() => ({}));
     const msg = (body && body.error && body.error.message) || '';
     if (r.ok) return { model, ok: true, ms, tag: 'ALIVE', note: '' };
-    if (r.status === 401 || r.status === 403 || /credential|unauthor|invalid api key/i.test(msg))
-      return { model, ok: false, tag: 'DEAD CREDS', note: 'quota demoted — may revive later' };
+    if (r.status === 401 || r.status === 403 || /credential|unauthor|invalid api key/i.test(msg)) {
+      // A legacy config that fails validation can leave the provider without any
+      // credentials at all, which looks exactly like a quota-demoted key.
+      const note = legacyShadows.length
+        ? 'invalid creds OR blocked by legacy config — retire ' +
+          legacyShadows.map((p) => path.basename(p)).join(', ')
+        : 'quota demoted — may revive later';
+      return { model, ok: false, tag: 'DEAD CREDS', note };
+    }
     if (r.status === 429) return { model, ok: true, ms, tag: 'RATE-LIMITED', note: 'alive, cooling down' };
     if (r.status >= 500) return { model, ok: false, tag: 'UPSTREAM DOWN', note: msg.slice(0, 60) };
     return { model, ok: false, tag: 'ERR ' + r.status, note: msg.slice(0, 60) };

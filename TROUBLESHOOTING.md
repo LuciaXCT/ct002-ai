@@ -67,6 +67,38 @@ The installer does this automatically on fresh runs — this manual block is for
 
 ---
 
+## 4b. `Configuration is invalid ... Unrecognized keys: "baseURL", "apiKey"`
+
+An old config file is still being read. opencode merges **every** config it finds in
+`~/.config/opencode` — a leftover `config.json` or `opencode.jsonc` is read alongside your
+`opencode.json`, and one stale provider entry there fails validation for everything. You'll
+see it as `Unrecognized keys`, or as a provider that insists your valid key is invalid.
+
+```bash
+ls ~/.config/opencode/ | grep -E 'config\.json|opencode\.jsonc'
+mv ~/.config/opencode/config.json   ~/.config/opencode/config.json.retired
+mv ~/.config/opencode/opencode.jsonc ~/.config/opencode/opencode.jsonc.retired
+opencode debug config | head -30      # confirm it loads now
+```
+
+The installer retires these automatically (backup kept as `*.retired.<timestamp>`). If the
+legacy file held provider keys you still need, put them under `provider.<id>.options` — not
+at the provider top level:
+
+```json
+{
+  "provider": {
+    "ct002": {
+      "options": { "baseURL": "http://localhost:20128/v1", "apiKey": "sk-..." }
+    }
+  }
+}
+```
+
+`ct002-doctor` prints a warning when it spots a legacy config sitting next to your real one.
+
+---
+
 ## 5. `No active credentials for provider: openai`
 
 Your default model's upstream is **quota-demoted on the router** — the model is real, the router
