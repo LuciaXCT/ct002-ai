@@ -114,9 +114,15 @@ printf '%s  preview: %s[🤑Made CT-OO2] wazzup %s 😭✌️ what are we cookin
 
 # ─── mode choice ────────────────────────────────────────────
 printf '%sWhere should the AI brain live?%s\n' "$B" "$X"
-printf '  %s1)%s %s on-device%s — opencode + 9router both installed HERE (works offline, free models)\n' "$Y" "$X" "$B" "$X"
-printf '  %s2)%s %s connect%s   — opencode here, brain on another machine (LAN/localhost router)\n' "$Y" "$X" "$B" "$X"
-printf '  %s3)%s %s skip%s      — config only, I already have a router endpoint + key\n' "$Y" "$X" "$B" "$X"
+if [ "$IS_WSL" = true ] && have opencode && opencode --version 2>/dev/null | grep -q "arena"; then
+  printf '  %s1)%s %s on-device%s — NOT recommended on WSL with arena binary (9router needs node/npm)\n' "$Y" "$X" "$B" "$X"
+  printf '  %s2)%s %s connect%s   — RECOMMENDED: opencode here, 9router on phone/VPS\n' "$Y" "$X" "$B" "$X"
+  printf '  %s3)%s %s skip%s      — config only, you already have router endpoint + key\n' "$Y" "$X" "$B" "$X"
+else
+  printf '  %s1)%s %s on-device%s — opencode + 9router both installed HERE (works offline, free models)\n' "$Y" "$X" "$B" "$X"
+  printf '  %s2)%s %s connect%s   — opencode here, brain on another machine (LAN/localhost router)\n' "$Y" "$X" "$B" "$X"
+  printf '  %s3)%s %s skip%s      — config only, I already have a router endpoint + key\n' "$Y" "$X" "$B" "$X"
+fi
 MODE=""
 while true; do
   printf '? choice %s[1]%s: ' "$DM" "$X"
@@ -156,7 +162,12 @@ fi
 # ─── opencode ───────────────────────────────────────────────
 step "3/6" "opencode"
 if have opencode; then
-  ok "already installed: $(opencode --version 2>/dev/null || which opencode)"
+  VER=$(opencode --version 2>/dev/null | head -1)
+  ok "already installed: $VER"
+  # On WSL with arena binary, prefer connect/skip mode (no local 9router needed)
+  if [ "$IS_WSL" = true ] && echo "$VER" | grep -q "arena"; then
+    ok "Arena binary detected — recommend mode 2 (connect) or 3 (skip)"
+  fi
 else
   if ask_yn "opencode not found — install it now?" Y; then
     curl -fsSL https://opencode.ai/install | bash & SPID=$!
@@ -231,7 +242,12 @@ case "$MODE" in
     ;;
   2)
     step "4/6" "Remote router"
-    printf '%s  VPS? use http://localhost:20128 or http://<VPS_IP>:20128%s\n' "$DM" "$X"
+    if [ "$IS_WSL" = true ]; then
+      printf '%s  Your phone running 9router? Use its LAN IP (e.g. http://192.168.1.50:20128)%s\n' "$DM" "$X"
+      printf '%s  Or VPS with 9router? http://<VPS_IP>:20128%s\n' "$DM" "$X"
+    else
+      printf '%s  VPS? use http://localhost:20128 or http://<VPS_IP>:20128%s\n' "$DM" "$X"
+    fi
     printf '? router base URL %s[http://localhost:20128]%s: ' "$DM" "$X"
     read -r ROUTER_URL || ROUTER_URL=""
     ROUTER_URL=${ROUTER_URL:-http://localhost:20128}
@@ -280,9 +296,19 @@ fi
 
 # ─── summary + confirm ──────────────────────────────────────
 printf '\n%s── SUMMARY ──────────────────────────────%s\n' "$B" "$X"
-printf '  mode        : %s\n' "$([ "$MODE" = 1 ] && printf 'on-device' || { [ "$MODE" = 2 ] && printf 'connect %s' "$ROUTER_URL" || printf 'config-only'; })"
+if [ "$MODE" = 1 ]; then
+  MODE_DESC="on-device"
+  ROUTER_STATUS=$({ curl -s -m 3 -o /dev/null http://localhost:20128/v1/models && printf 'running' || printf 'not running yet'; })
+elif [ "$MODE" = 2 ]; then
+  MODE_DESC="connect $ROUTER_URL"
+  ROUTER_STATUS="remote"
+else
+  MODE_DESC="config-only"
+  ROUTER_STATUS="n/a"
+fi
+printf '  mode        : %s\n' "$MODE_DESC"
 printf '  opencode    : %s\n' "$(have opencode && printf 'ready' || printf 'MISSING')"
-printf '  9router     : %s\n' "$([ "$MODE" = 1 ] && { curl -s -m 3 -o /dev/null http://localhost:20128/v1/models && printf 'running' || printf 'not running yet'; } || printf 'n/a')"
+printf '  9router     : %s\n' "$ROUTER_STATUS"
 printf '  api key     : %s\n' "$([ -n "$API_KEY" ] && mask_key "$API_KEY" || printf 'placeholder (edit later)')"
 printf '  agent       : %s\n' "$([ "$INSTALL_AGENT" = true ] && printf 'install/overwrite ct002.md' || printf 'keep existing')"
 printf '  your name   : %s\n' "$USERNAME"
