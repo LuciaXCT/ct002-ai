@@ -214,16 +214,40 @@ case "$MODE" in
       fi
     fi
 
-    if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
-      ok "router already running on :20128"
-    else
-      if ask_yn "start 9router now (background)?" Y; then
-        (nohup 9router --no-browser >/dev/null 2>&1 &) 
-        sleep 4
-        curl -s -m 5 -o /dev/null http://localhost:20128/v1/models \
-          && ok "router is up" || warn "router not answering yet — give it 10s, then run: 9router"
+    if [ "$IS_TERMUX" = true ]; then
+      step "4/6" "9router (the free-model brain) + watchdog"
+      if have ct002-serve; then
+        ok "watchdog already installed"
       else
-        warn "start it later with: 9router"
+        ok "will be installed with helpers"
+      fi
+      if ct002-serve status 2>/dev/null | grep -q "router  : UP"; then
+        ok "router already up on :20128 (watchdog guarding)"
+      else
+        if ask_yn "start 9router with watchdog now? (keeps it alive when Android freezes Termux)" Y; then
+          (ct002-serve start >/dev/null 2>&1 &)
+          sleep 6
+          if ct002-serve status 2>/dev/null | grep -q "router  : UP"; then
+            ok "router up + watchdog active — survives app switch / screen off"
+          else
+            warn "router booting — watchdog will revive it. check: ct002-serve status"
+          fi
+        else
+          warn "start later: ct002-serve"
+        fi
+      fi
+    else
+      if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
+        ok "router already running on :20128"
+      else
+        if ask_yn "start 9router now (background)?" Y; then
+          (nohup 9router --no-browser >/dev/null 2>&1 &) 
+          sleep 4
+          curl -s -m 5 -o /dev/null http://localhost:20128/v1/models \
+            && ok "router is up" || warn "router not answering yet — give it 10s, then run: 9router"
+        else
+          warn "start it later with: 9router"
+        fi
       fi
     fi
 
@@ -494,8 +518,10 @@ printf '\n%s  ██████████████████████
 printf '%s   CT-002 INSTALLED%s\n' "$B" "$X"
 printf '%s   run:  opencode%s\n' "$G" "$X"
 if [ "$IS_TERMUX" = true ]; then
-  printf '%s   termux: ct002-serve (own session) + opencode in another%s\n' "$G" "$X"
-  printf '%s   watchdog auto-revives the router when Android freezes it%s\n' "$DM" "$X"
+  printf '%s   PHONE:  ct002-serve   (starts 9router + watchdog, keeps it alive forever)%s\n' "$G" "$X"
+  printf '%s   then:  opencode        (in another Termux session)%s\n' "$G" "$X"
+  printf '%s   watchdog revives router when Android freezes Termux (screen off / app switch)%s\n' "$DM" "$X"
+  printf '%s   check:  ct002-serve status   (router up? watchdog alive?)%s\n' "$DM" "$X"
 fi
 printf '%s   models rotate in TUI — press m%s\n' "$DM" "$X"
 printf '%s   your key lives only in %s — never in this repo%s\n' "$DM" "$TARGET/opencode.json" "$X"
