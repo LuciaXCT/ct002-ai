@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# ct002-serve — watchdog that keeps 9router alive on Android/Termux
+# luciaa-serve — watchdog that keeps 9router alive on Android/Termux
 # why: Android freezes/kills Termux processes seconds after you leave the app
 #      (and the dashboard's memory spike can trip the OOM killer).
 #      This revives the router automatically, forever.
 #
-#   ct002-serve start    → guard the router (run this INSTEAD of bare `9router`)
-#   ct002-serve status   → is the router up? is the guard awake?
-#   ct002-serve stop     → stop guard + router
+#   luciaa-serve start    → guard the router (run this INSTEAD of bare `9router`)
+#   luciaa-serve status   → is the router up? is the guard awake?
+#   luciaa-serve stop     → stop guard + router
 #
 # PORTABLE: installer rewrites shebang to $PREFIX/bin/bash on Termux.
 
@@ -46,7 +46,7 @@ start_router() {
 
 notify() {
   command -v termux-notification >/dev/null 2>&1 && \
-    termux-notification --title "CT-002" --content "$1" >/dev/null 2>&1
+    termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1
 }
 
 case "${1:-start}" in
@@ -99,7 +99,7 @@ case "${1:-start}" in
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
       echo "watchdog: running (pid $(cat "$PIDFILE"))"
     else
-      echo "watchdog: not running — start it with: ct002-serve"
+      echo "watchdog: not running — start it with: luciaa-serve"
     fi
     [ -f "$LOG" ] && echo "recent events:" && tail -5 "$LOG" | sed 's/^/    /'
     ;;
@@ -114,6 +114,6 @@ case "${1:-start}" in
     echo "router stopped"
     ;;
   *)
-    echo "usage: ct002-serve [start|status|stop]"
+    echo "usage: luciaa-serve [start|status|stop]"
     ;;
 esac

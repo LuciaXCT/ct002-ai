@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # CT-002 CodersTeam — interactive opencode installer
-# Linux / macOS / Termux / WSL
+# Linux / macOS / Termux / WSL / VPS — portable shebang, healed on Termux.
 # Every step asks first. Nothing is auto-installed without your say-so.
 
 set -u
@@ -45,6 +45,44 @@ ask_yn() {
 
 mask_key() { printf '%s…%s' "${1:0:10}" "${1: -4}"; }
 
+# ─── cross-OS 9router runner ───────────────────────────────────
+# Termux lacks /usr/bin/env → bare `9router` dies with bad interpreter.
+# VPS/Linux/macOS are fine. This heals + resolves on every OS.
+R9_BIN=""
+resolve_r9() {
+  [ -n "$R9_BIN" ] && return 0
+  if command -v 9router >/dev/null 2>&1 && 9router --version >/dev/null 2>&1; then R9_BIN="9router"; return 0; fi
+  for c in "${PREFIX:-/usr}/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] && R9_BIN="node $c" && return 0
+  done
+  if command -v npx >/dev/null 2>&1; then R9_BIN="npx -y 9router"; return 0; fi
+  R9_BIN="9router"
+}
+heal_termux_shebang() {
+  [ -d "/data/data/com.termux" ] || return 0
+  for c in "$PREFIX/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] || continue
+    head -1 "$c" | grep -q "^#!/usr/bin/env" || continue
+    sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null && ok "healed 9router shebang for Termux"
+  done
+}
+have_r9() { resolve_r9; $R9_BIN --version >/dev/null 2>&1; }
+
+# ─── 9router installer (latest, prefer-online) ─────────────────
+install_9router() {
+  if ! have npm; then
+    if [ "$IS_TERMUX" = true ]; then
+      ask_yn "install nodejs via pkg?" Y && pkg install -y nodejs >/dev/null 2>&1
+    else
+      err "npm missing — install node.js first (https://nodejs.org)"; exit 1
+    fi
+  fi
+  npm i -g 9router@latest --prefer-online >/dev/null 2>&1 & SPID=$!
+  spin "npm i -g 9router@latest --prefer-online" $SPID
+  wait $SPID && ok "9router installed (latest)" || { err "npm install failed"; exit 1; }
+  heal_termux_shebang; resolve_r9
+}
+
 spin() {
   local msg="$1" pid="$2" i=0 ch='|/-\' t=0
   while kill -0 "$pid" 2>/dev/null; do
@@ -62,29 +100,29 @@ if [ "$COLS" -ge 60 ] 2>/dev/null; then
   cat <<'ART'
   ██████   ██████╗   ██████╗ ███████╗██████╗  ███████╗
  ██╔════╝ ██╔═══██╗  ██╔══██╗██╔════╝██╔══██╗██╔════╝
- ██║      ██║   ██║  ██║  ██║█████╗  ██████╔╝███████╗
+ ██║      ██║   ██║  ██║  ██║█████╗  ██████╔╝███████║
  ██║      ██║   ██║  ██║  ██║██╔══╝  ██╔══██╗╚════██║
  ╚██████╗ ╚██████╔╝  ██████╔╝███████╗██║  ██║███████║
-  ╚═════╝  ╚═════╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝
+  ╚═════╝  ╚═════╝   ╚═════╝ ╚══════╝╚══════╝╚══════╝
              ████████╗███████╗ █████╗   ███╗   ███╗
              ╚══██╔══╝██╔════╝██╔══██╗  ████╗ ████║
                 ██║   █████╗  ███████║  ██╔████╔██║
                 ██║   ██╔══╝  ██╔══██║  ██║╚██╔╝██║
                 ██║   ███████╗██║  ██║  ██║ ╚═╝ ██║
-                ╚═╝   ╚══════╝╚═╝  ╚═╝  ╚═╝     ╚═╝
+                ╚══╝   ╚══════╝╚══╝  ╚═╝  ╚═╝     ╚═╝
 ART
   printf '%s' "$X"
 else
   printf '%s' "$C"
   cat <<'ART'
 ╔═════════════════════════╗
-║   C O D E R S T E A M   ║
-║      CT-002 · v1.0      ║
+║      L U C I A A       ║
+║   unfiltered · v2.0    ║
 ╚═════════════════════════╝
 ART
   printf '%s' "$X"
 fi
-printf '%s   CodersTeam-002 · unfiltered opencode setup · v1.4%s\n\n' "$B" "$X"
+printf '%s   luciaa · unfiltered opencode + adult setup · v2.0%s\n\n' "$B" "$X"
 
 # ─── environment detection ──────────────────────────────────
 IS_TERMUX=false; IS_WSL=false; OS_NAME="linux"
@@ -104,13 +142,13 @@ else
 fi
 
 # ─── your name — first question, personal ──────────────────
-printf '%sWhat should CT-002 call you?%s\n' "$B" "$X"
-printf '%s  this name shows up every time you say "hey ct002"%s\n' "$DM" "$X"
-printf '? your name %s[CodersTeam]%s: ' "$DM" "$X"
+printf '%sWhat should luciaa call you?%s\n' "$B" "$X"
+printf '%s  this name shows up every time you say "hey luciaa"%s\n' "$DM" "$X"
+printf '? your name %s[luciaa]%s: ' "$DM" "$X"
 read -r USERNAME || USERNAME=""
-USERNAME=${USERNAME:-CodersTeam}
+USERNAME=${USERNAME:-luciaa}
 USERNAME=${USERNAME//\"/}
-printf '%s  preview: %s[🤑Made CT-OO2] wazzup %s 😭✌️ what are we cooking%s\n\n' "$DM" "$G" "$USERNAME" "$X"
+printf '%s  preview: %s[🤑luciaa] wazzup %s 😭✌️ what are we cooking%s\n\n' "$DM" "$G" "$USERNAME" "$X"
 
 # ─── mode choice ────────────────────────────────────────────
 printf '%sWhere should the AI brain live?%s\n' "$B" "$X"
@@ -195,20 +233,13 @@ fetch_local_key() {
 case "$MODE" in
   1)
     step "4/6" "9router (the free-model brain)"
-    if have 9router; then
-      ok "already installed"
+    heal_termux_shebang
+    resolve_r9
+    if have_r9; then
+      ok "already installed ($R9_BIN → $($R9_BIN --version 2>/dev/null | head -1))"
     else
       if ask_yn "install 9router on this device? (needs node/npm)" Y; then
-        if ! have npm; then
-          if [ "$IS_TERMUX" = true ]; then
-            ask_yn "install nodejs via pkg?" Y && pkg install -y nodejs >/dev/null 2>&1
-          else
-            err "npm missing — install node.js first (https://nodejs.org)"; exit 1
-          fi
-        fi
-        npm install -g 9router >/dev/null 2>&1 & SPID=$!
-        spin "npm install -g 9router" $SPID
-        wait $SPID && ok "9router installed" || { err "npm install failed"; exit 1; }
+        install_9router
       else
         err "on-device mode needs 9router — pick mode 2 or 3 next time"; exit 1
       fi
@@ -216,24 +247,24 @@ case "$MODE" in
 
     if [ "$IS_TERMUX" = true ]; then
       step "4/6" "9router (the free-model brain) + watchdog"
-      if have ct002-serve; then
+      if have luciaa-serve; then
         ok "watchdog already installed"
       else
         ok "will be installed with helpers"
       fi
-      if ct002-serve status 2>/dev/null | grep -q "router  : UP"; then
+      if luciaa-serve status 2>/dev/null | grep -q "router  : UP"; then
         ok "router already up on :20128 (watchdog guarding)"
       else
         if ask_yn "start 9router with watchdog now? (keeps it alive when Android freezes Termux)" Y; then
-          (ct002-serve start >/dev/null 2>&1 &)
+          (luciaa-serve start >/dev/null 2>&1 &)
           sleep 6
-          if ct002-serve status 2>/dev/null | grep -q "router  : UP"; then
+          if luciaa-serve status 2>/dev/null | grep -q "router  : UP"; then
             ok "router up + watchdog active — survives app switch / screen off"
           else
-            warn "router booting — watchdog will revive it. check: ct002-serve status"
+            warn "router booting — watchdog will revive it. check: luciaa-serve status"
           fi
         else
-          warn "start later: ct002-serve"
+          warn "start later: luciaa-serve"
         fi
       fi
     else
@@ -241,10 +272,12 @@ case "$MODE" in
         ok "router already running on :20128"
       else
         if ask_yn "start 9router now (background)?" Y; then
-          (nohup 9router --no-browser >/dev/null 2>&1 &) 
+          resolve_r9
+          # shellcheck disable=SC2086
+          (nohup $R9_BIN --no-browser --skip-update >/dev/null 2>&1 &)
           sleep 4
           curl -s -m 5 -o /dev/null http://localhost:20128/v1/models \
-            && ok "router is up" || warn "router not answering yet — give it 10s, then run: 9router"
+            && ok "router is up (via $R9_BIN)" || warn "router not answering yet — give it 10s, then run: $R9_BIN"
         else
           warn "start it later with: 9router"
         fi
@@ -371,9 +404,9 @@ if [ -n "$RETIRED_LEGACY" ]; then
 fi
 
 if [ "$INSTALL_AGENT" = true ]; then
-  cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agent/ct002.md"
-  cp "$REPO_DIR/.opencode/agents/ct002.md" "$TARGET/agents/ct002.md"
-  ok "agent → agent/ct002.md + agents/ct002.md (both conventions)"
+  cp "$REPO_DIR/.opencode/agents/anondark.md" "$TARGET/agent/anondark.md"
+  cp "$REPO_DIR/.opencode/agents/anondark.md" "$TARGET/agents/anondark.md"
+  ok "agent → agent/anondark.md + agents/anondark.md (both conventions)"
 fi
 
 if [ -n "$API_KEY" ]; then
@@ -390,7 +423,7 @@ fi
 
 # persona.json (name collected at start)
 cat > "$TARGET/persona.json" <<EOF
-{ "name": "CT-002 CodersTeam", "team": "CodersTeam", "address": "$USERNAME", "version": "1.3.0" }
+{ "name": "luciaa", "team": "luciaa", "address": "$USERNAME", "version": "2.0.0" }
 EOF
 ok "persona.json → hello, $USERNAME"
 
@@ -417,22 +450,22 @@ for f in "$TARGET/opencode.jsonc" "$TARGET/config.json"; do
 done
 
 # bake the name into the agent files (trigger words + addressing)
-for AF in "$TARGET/agent/ct002.md" "$TARGET/agents/ct002.md"; do
+for AF in "$TARGET/agent/anondark.md" "$TARGET/agents/anondark.md"; do
   [ -f "$AF" ] && sed -i.bak "s|{{USER_NAME}}|$USERNAME|g" "$AF" && rm -f "$AF.bak"
 done
 if [ "$INSTALL_AGENT" = true ]; then
-  ok "name baked in — 'hey ct002' now greets you as $USERNAME"
+  ok "name baked in — 'hey luciaa' now greets you as $USERNAME"
 fi
 
 # name-change helper — users run this anytime
-cat > "$TARGET/ct002-name" <<'EOF'
+cat > "$TARGET/luciaa-name" <<'EOF'
 #!/bin/bash
-# change the name CT-002 calls you — then restart opencode
+# change the name luciaa calls you — then restart opencode
 N="${1:-}"
-[ -z "$N" ] && { echo "usage: ct002-name <newname>"; exit 1; }
+[ -z "$N" ] && { echo "usage: luciaa-name <newname>"; exit 1; }
 D="$HOME/.config/opencode"
 FOUND=0
-for F in "$D/agent/ct002.md" "$D/agents/ct002.md"; do
+for F in "$D/agent/anondark.md" "$D/agents/anondark.md"; do
   [ -f "$F" ] || continue
   FOUND=1
   sed -i.bak "s|ALWAYS address them as \*\*[^*]*\*\*|ALWAYS address them as **$N**|" "$F"
@@ -441,36 +474,53 @@ for F in "$D/agent/ct002.md" "$D/agents/ct002.md"; do
   sed -i.bak "s|wazzup {{USER_NAME}}|wazzup $N|" "$F"
   rm -f "$F.bak"
 done
-[ "$FOUND" = 0 ] && { echo "CT-002 agent not found — run the ct002-ai installer first"; exit 1; }
+[ "$FOUND" = 0 ] && { echo "luciaa agent not found — run the luciaa-ai installer first"; exit 1; }
 [ -f "$D/persona.json" ] && sed -i.bak "s|\"address\": \"[^\"]*\"|\"address\": \"$N\"|" "$D/persona.json" && rm -f "$D/persona.json.bak"
-echo "bet — CT-002 calls you $N now. restart opencode."
+echo "bet — luciaa calls you $N now. restart opencode."
 EOF
-chmod +x "$TARGET/ct002-name"
-printf '%s  helper → change name anytime: ~/.config/opencode/ct002-name <newname>%s\n' "$DM" "$X"
+chmod +x "$TARGET/luciaa-name"
+printf '%s  helper → change name anytime: ~/.config/opencode/luciaa-name <newname>%s\n' "$DM" "$X"
 
 # model doctor — probe which models are actually alive
-cp "$REPO_DIR/ct002-doctor" "$TARGET/ct002-doctor"
-chmod +x "$TARGET/ct002-doctor"
-printf '%s  doctor → check model health: ct002-doctor (--fix heals a dead default)%s\n' "$DM" "$X"
+cp "$REPO_DIR/ct002-doctor" "$TARGET/luciaa-doctor"
+chmod +x "$TARGET/luciaa-doctor"
+printf '%s  doctor → check model health: luciaa-doctor (--fix heals a dead default)%s\n' "$DM" "$X"
+
+# ─── shebang heal for Termux (cross-OS portable) ─────────────
+# Repo ships #!/usr/bin/env bash|node (Linux/VPS/macOS native).
+# Termux has no /usr/bin/env and no /bin/bash → rewrite to $PREFIX paths.
+if [ -d "/data/data/com.termux" ]; then
+  for h in "$TARGET/luciaa-serve" "$TARGET/luciaa-name" "$TARGET/luciaa-doctor"; do
+    [ -f "$h" ] || continue
+    sed -i "1s|#!/bin/bash|#!$PREFIX/bin/bash|" "$h" 2>/dev/null
+    sed -i "1s|#!/usr/bin/env bash|#!$PREFIX/bin/bash|" "$h" 2>/dev/null
+    sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$h" 2>/dev/null
+  done
+  ok "shebangs healed for Termux ($PREFIX/bin)"
+fi
 
 # put helpers on PATH (termux: $PREFIX/bin, else ~/.local/bin)
 BIN_DIR="${PREFIX:-}/bin"
 [ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
-cp "$REPO_DIR/ct002-serve" "$TARGET/ct002-serve"
-chmod +x "$TARGET/ct002-serve"
-ln -sf "$TARGET/ct002-doctor" "$BIN_DIR/ct002-doctor"
-ln -sf "$TARGET/ct002-name" "$BIN_DIR/ct002-name"
-ln -sf "$TARGET/ct002-serve" "$BIN_DIR/ct002-serve"
+cp "$REPO_DIR/ct002-serve" "$TARGET/luciaa-serve"
+chmod +x "$TARGET/luciaa-serve"
+ln -sf "$TARGET/luciaa-doctor" "$BIN_DIR/luciaa-doctor"
+ln -sf "$TARGET/luciaa-name" "$BIN_DIR/luciaa-name"
+ln -sf "$TARGET/luciaa-serve" "$BIN_DIR/luciaa-serve"
 
 # deck on PATH too (bare names from anywhere)
-ln -sf "$TARGET/ct002/ct002-menu.mjs"  "$BIN_DIR/ct002-menu"
-printf '%s  deck   → full TUI: ct002-menu%s\n' "$DM" "$X"
+ln -sf "$TARGET/ct002/ct002-menu.mjs"  "$BIN_DIR/luciaa-menu"
+printf '%s  deck   → full TUI: luciaa-menu%s\n' "$DM" "$X"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not on PATH — add: export PATH=\"$BIN_DIR:$PATH\"" ;; esac
 
-# shell hook — plain `opencode` boots cleanly
-HOOK_SNIPPET='# CT-002: plain `opencode` wrapper
+# shell hook — plain `opencode` boots cleanly + warns on repo-shadow
+HOOK_SNIPPET='# luciaa: plain `opencode` wrapper + repo-shadow guard
 opencode() {
+  if [ -f "./opencode.json" ] && grep -q "YOUR_9ROUTER_KEY_HERE" ./opencode.json 2>/dev/null; then
+    printf "\033[33m  ! you are inside luciaa-ai repo — opencode would read ./opencode.json (placeholder key) instead of ~/.config/opencode/opencode.json\033[0m\n" >&2
+    printf "\033[33m    fix: cd ~ && opencode  (repo json never holds keys by design)\033[0m\n" >&2
+  fi
   if [ -n "${TMUX:-}" ] || [ "${OPENCODE_RAW:-}" = "1" ] || ! command -v tmux >/dev/null 2>&1; then
     command opencode "$@"
   else
@@ -480,7 +530,7 @@ opencode() {
 RC_FILES=""
 for RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
   [ -f "$RC" ] || continue
-  grep -q "CT-002: plain .opencode. boots" "$RC" 2>/dev/null && continue
+  grep -q "luciaa: plain .opencode. boots" "$RC" 2>/dev/null && continue
   printf '\n%s\n' "$HOOK_SNIPPET" >> "$RC"
   RC_FILES="$RC_FILES $RC"
 done
@@ -491,7 +541,7 @@ fi
 
 # keeping an existing agent? still rename it to the chosen name
 if [ "$INSTALL_AGENT" = false ]; then
-  "$TARGET/ct002-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"
+  "$TARGET/luciaa-name" "$USERNAME" >/dev/null 2>&1 && ok "existing agent renamed → $USERNAME"
 fi
 
 # ─── verify + AUTO-HEAL ────────────────────────────────────
@@ -501,11 +551,11 @@ if curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" | gr
   curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" \
     | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -7 | sed 's/^/      /'
   # doctor's verdict + self-heal so install NEVER ends on a dead default
-  if [ -x "$TARGET/ct002-doctor" ]; then
-    "$TARGET/ct002-doctor" --fix 2>/dev/null | grep -E 'ALIVE|DEAD|fixed|default is alive|auto-rotate' | sed 's/^/      /'
+  if [ -x "$TARGET/luciaa-doctor" ]; then
+    "$TARGET/luciaa-doctor" --fix 2>/dev/null | grep -E 'ALIVE|DEAD|fixed|default is alive|auto-rotate' | sed 's/^/      /'
   fi
 else
-  warn "couldn't list models right now — if the router just booted, wait 10s and run: ct002-doctor --fix"
+  warn "couldn't list models right now — if the router just booted, wait 10s and run: luciaa-doctor --fix"
 fi
 
 # validate the final config — an install must never end with an unbootable setup
@@ -515,13 +565,13 @@ node -e "JSON.parse(require('fs').readFileSync('$TARGET/opencode.json','utf8'))"
 
 # ─── done ───────────────────────────────────────────────────
 printf '\n%s  ██████████████████████████████████%s\n' "$G" "$X"
-printf '%s   CT-002 INSTALLED%s\n' "$B" "$X"
+printf '%s   luciaa INSTALLED%s\n' "$B" "$X"
 printf '%s   run:  opencode%s\n' "$G" "$X"
 if [ "$IS_TERMUX" = true ]; then
-  printf '%s   PHONE:  ct002-serve   (starts 9router + watchdog, keeps it alive forever)%s\n' "$G" "$X"
+  printf '%s   PHONE:  luciaa-serve   (starts 9router + watchdog, keeps it alive forever)%s\n' "$G" "$X"
   printf '%s   then:  opencode        (in another Termux session)%s\n' "$G" "$X"
   printf '%s   watchdog revives router when Android freezes Termux (screen off / app switch)%s\n' "$DM" "$X"
-  printf '%s   check:  ct002-serve status   (router up? watchdog alive?)%s\n' "$DM" "$X"
+  printf '%s   check:  luciaa-serve status   (router up? watchdog alive?)%s\n' "$DM" "$X"
 fi
 printf '%s   models rotate in TUI — press m%s\n' "$DM" "$X"
 printf '%s   your key lives only in %s — never in this repo%s\n' "$DM" "$TARGET/opencode.json" "$X"

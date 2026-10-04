@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// ct002-doctor — probe every model in your opencode config, show what's alive
-// run:  ct002-doctor          → health table
-//       ct002-doctor --fix    → also switch default to a live model if the current one is dead
+// luciaa-doctor — probe every model in your opencode config, show what's alive
+// run:  luciaa-doctor          → health table
+//       luciaa-doctor --fix    → also switch default to a live model if the current one is dead
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,7 +30,7 @@ function loadConfig() {
 
 const { cfg, file: CFG } = loadConfig();
 if (!cfg) {
-  console.log('✗ no readable config at ' + CFG + ' — run the ct002-ai installer first');
+  console.log('✗ no readable config at ' + CFG + ' — run the luciaa-ai installer first');
   process.exit(1);
 }
 
@@ -48,16 +48,16 @@ if (legacyShadows.length) {
   console.log('    mv <file> <file>.retired');
 }
 
-const prov = cfg.provider?.ct002;
+const prov = cfg.provider?.anondark;
 if (!prov) {
-  console.log('✗ no ct002 provider in config — run the installer');
+  console.log('✗ no anondark provider in config — run the installer');
   process.exit(1);
 }
 const base = (prov.options?.baseURL || '').replace(/\/v1\/?$/, '');
 const key = prov.options?.apiKey || '';
 
 // ─── repo-shadow + placeholder guard (the #1 invalid-key cause) ──
-// opencode merges ./opencode.json when you run INSIDE ~/ct002-ai.
+// opencode merges ./opencode.json when you run INSIDE ~/luciaa-ai.
 // That repo file always holds YOUR_9ROUTER_KEY_HERE by design (never commit keys).
 // Fingers cold on the screen, eyes blurry — you cd wrong and boom, invalid key.
 try {
@@ -75,8 +75,8 @@ try {
 if (!key || key.includes('YOUR_9ROUTER_KEY_HERE')) {
   // _i think: no point probing, every model will scream 401_
   console.log('✗ apiKey is still placeholder in ' + CFG);
-  console.log('  fix 1: cd ~ && opencode  (are you inside ~/ct002-ai right now?)');
-  console.log('  fix 2: paste real sk-... from 9router Keys page into provider.ct002.options.apiKey');
+  console.log('  fix 1: cd ~ && opencode  (are you inside ~/luciaa-ai right now?)');
+  console.log('  fix 2: paste real sk-... from 9router Keys page into provider.anondark.options.apiKey');
   console.log('  fix 3: auto-fetch local key → curl -s -H "x-9r-cli-token: $(printf ...)" http://localhost:20128/api/keys');
   process.exit(1);
 }
@@ -116,10 +116,10 @@ async function probe(model) {
   }
 }
 
-const current = (cfg.agent?.ct002?.model || '').replace(/^ct002\//, '');
+const current = (cfg.agent?.anondark?.model || '').replace(/^anondark\//, '');
 const width = Math.max(...models.map((m) => m.length)) + 2;
 
-console.log('\n  ct002-doctor — probing ' + models.length + ' models on ' + base + ' …\n');
+console.log('\n  luciaa-doctor — probing ' + models.length + ' models on ' + base + ' …\n');
 const results = await Promise.all(models.map(probe));
 
 for (const r of results) {
@@ -140,10 +140,10 @@ if (process.argv.includes('--fix')) {
   if (currentResult && currentResult.ok) {
     console.log('  default is alive — nothing to fix');
   } else if (aliveIds.length) {
-    cfg.agent.ct002.model = 'ct002/' + aliveIds[0];
-    if (cfg.model !== undefined) cfg.model = 'ct002/' + aliveIds[0];
+    cfg.agent.anondark.model = 'anondark/' + aliveIds[0];
+    if (cfg.model !== undefined) cfg.model = 'anondark/' + aliveIds[0];
     fs.writeFileSync(CFG, JSON.stringify(cfg, null, 2));
-    console.log('  fixed: default → ct002/' + aliveIds[0] + ' — restart opencode');
+    console.log('  fixed: default → anondark/' + aliveIds[0] + ' — restart opencode');
   } else {
     console.log('  nothing alive — is the router up? run: 9router');
   }
