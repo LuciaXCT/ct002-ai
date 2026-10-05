@@ -417,6 +417,21 @@ log "deps" "checking curl, git, node/npm"
 MISSING=""
 have curl || MISSING="curl $MISSING"
 have git  || MISSING="git $MISSING"
+
+# Termux: a `curl` whose libcurl/libssl are out of sync installs fine but dies
+# at runtime — "CANNOT LINK EXECUTABLE curl: cannot locate symbol ...
+# referenced by libcurl.so". Catch it here with the exact fix rather than
+# letting every later step fail confusingly.
+if have curl && ! curl --version >/dev/null 2>&1; then
+  err "curl is installed but broken (libcurl/libssl version mismatch)"
+  if [ "$IS_TERMUX" = true ]; then
+    warn "fix:  pkg update -y && pkg upgrade -y"
+    warn "      pkg install --reinstall -y openssl libcurl curl"
+  else
+    warn "reinstall curl + its TLS libraries for your distro"
+  fi
+  die "repair curl, then re-run the installer"
+fi
 if [ -n "$MISSING" ]; then
   warn "missing: $MISSING"
   if ask "install now?"; then
@@ -512,6 +527,63 @@ install_9router_local() {
   heal_r9_shebang
 }
 
+# ─── 9router health + auto-repair ──────────────────────────────
+# A half-installed 9router is a common Termux failure: npm gets interrupted
+# (network drop, OOM) and leaves either a dangling `9router` shim or a
+# node_modules/9router directory with no cli.js — and `command -v 9router`
+# still resolves it, so every later step looks fine and then dies at runtime.
+R9_TREES=(
+  "$PREFIX/lib/node_modules/9router"
+  "$HOME/.npm-global/lib/node_modules/9router"
+  "$HOME/.local/lib/node_modules/9router"
+  "$HOME/.npm/lib/node_modules/9router"
+  "/usr/local/lib/node_modules/9router"
+)
+
+clean_broken_9router() {
+  local p d pdir cand cleaned=false pathdirs=()
+  # a dangling symlink is not a runnable command, so `type -a` never lists it.
+  # scan $PATH directly to catch "9router -> (missing target)" leftovers.
+  IFS=':' read -ra pathdirs <<< "$PATH"
+  for pdir in "${pathdirs[@]}"; do
+    [ -n "$pdir" ] || continue
+    cand="$pdir/9router"
+    if [ -L "$cand" ] && [ ! -e "$cand" ] && [ -w "$pdir" ]; then
+      rm -f "$cand" 2>/dev/null && { warn "removed dangling 9router shim: $cand"; cleaned=true; }
+    fi
+  done
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -e "$p" ] && continue
+    [ -w "$(dirname "$p")" ] || continue
+    rm -f "$p" 2>/dev/null && { warn "removed dangling 9router shim: $p"; cleaned=true; }
+  done < <(type -a 9router 2>/dev/null | sed -n 's/^9router is //p')
+  for d in "${R9_TREES[@]}"; do
+    [ -d "$d" ] || continue
+    [ -f "$d/cli.js" ] && continue
+    [ -w "$d" ] || continue
+    rm -rf "$d" 2>/dev/null && { warn "removed incomplete 9router tree: $d"; cleaned=true; }
+  done
+  [ "$cleaned" = true ]
+}
+
+ensure_9router() {
+  heal_r9_shebang
+  R9_BIN=""
+  if have_r9; then ok "9router healthy"; return 0; fi
+  if clean_broken_9router; then
+    log "repair" "cleaned broken 9router remnants — reinstalling"
+    R9_BIN=""
+  fi
+  log "install" "9router (auto)"
+  install_9router_local
+  R9_BIN=""
+  if have_r9; then ok "9router ready"; return 0; fi
+  warn "9router still not runnable — using npx runtime (needs network on first use)"
+  resolve_r9
+  return 0
+}
+
 start_router_bg() {
   resolve_r9
   heal_r9_shebang
@@ -542,14 +614,7 @@ start_watchdog() {
 case "$MODE" in
   1)
     log "9router" "local installation + auto-start (unattended)"
-    heal_r9_shebang
-    resolve_r9
-    if have_r9; then
-      ok "9router already installed"
-    else
-      log "install" "9router (auto)"
-      install_9router_local
-    fi
+    ensure_9router
 
     if [ "$IS_TERMUX" = true ]; then
       log "watchdog" "Termux detected — starting luciaa-serve (auto)"

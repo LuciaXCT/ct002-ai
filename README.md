@@ -139,6 +139,10 @@ Env equivalents for automation: `LUCIA_ASSUME_YES=1`, `LUCIA_NAME`, `LUCIA_MODE`
 # SSH access: pkg install openssh && sshd
 ```
 
+> **Full Termux runbook: [TERMUX.md](TERMUX.md)** — Android settings, the
+> `CANNOT LINK EXECUTABLE "curl"` / OpenSSL mismatch blocker, keeping 9router
+> alive, reboot persistence, and a diagnostics bundle.
+
 ---
 
 ## Configuration
@@ -274,6 +278,8 @@ luciaa/
 | `No active credentials for provider` | Model quota exhausted | `luciaa-doctor --fix` |
 | `9router: connection refused` | Process killed by OOM / Android froze Termux | `luciaa-serve start` (watchdog) |
 | Two `opencode` binaries / models differ between sessions | Duplicate installs | `bash install.sh --dedup-only` |
+| `CANNOT LINK EXECUTABLE "curl" … libcurl.so` (Termux) | libcurl/libssl out of sync | `pkg update -y && pkg upgrade -y`; see [TERMUX.md](TERMUX.md) |
+| 9router installed but unrunnable | half-installed tree | `luciaa-serve repair` |
 | `git pull` conflicts | Local config modified | `git stash && git pull && git stash pop` |
 
 **Diagnostic Commands:**

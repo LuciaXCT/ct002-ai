@@ -7,6 +7,7 @@
 #   luciaa-serve start            → guard the router in the foreground
 #   luciaa-serve start --daemon   → guard it detached (survives app switch)
 #   luciaa-serve status           → is the router up? is the guard awake?
+#   luciaa-serve repair           → fix a half-installed 9router (reinstall)
 #   luciaa-serve logs             → tail the router log
 #   luciaa-serve stop             → stop guard + router
 #   luciaa-serve restart          → bounce both
@@ -90,6 +91,44 @@ notify() {
     termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1
 }
 
+# repair a half-installed 9router: dangling shims and node_modules/9router
+# trees with no cli.js (npm interrupted mid-install).
+npm_repair() {
+  local p d pdir cand pathdirs=()
+  # catch dangling `9router` shims (not listed by `type -a`)
+  IFS=':' read -ra pathdirs <<< "$PATH"
+  for pdir in "${pathdirs[@]}"; do
+    [ -n "$pdir" ] || continue
+    cand="$pdir/9router"
+    [ -L "$cand" ] && [ ! -e "$cand" ] && [ -w "$pdir" ] && rm -f "$cand" 2>/dev/null
+  done
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -e "$p" ] || rm -f "$p" 2>/dev/null
+  done < <(type -a 9router 2>/dev/null | sed -n 's/^9router is //p')
+  for d in "$PREFIX/lib/node_modules/9router" \
+           "$HOME/.npm-global/lib/node_modules/9router" \
+           "$HOME/.local/lib/node_modules/9router" \
+           "$HOME/.npm/lib/node_modules/9router"; do
+    [ -d "$d" ] && [ ! -f "$d/cli.js" ] && [ -w "$d" ] && rm -rf "$d" 2>/dev/null
+  done
+  command -v npm >/dev/null 2>&1 || return 1
+  npm i -g 9router@latest --prefer-online >/dev/null 2>&1
+}
+
+cmd_repair() {
+  echo "repairing 9router install…"
+  heal_shebang
+  if npm_repair; then echo "npm reinstall done"; else echo "npm unavailable — install Node.js/npm first"; fi
+  R9_BIN=""; resolve_r9
+  if $R9_BIN --version >/dev/null 2>&1; then
+    echo "9router OK: $R9_BIN"
+  else
+    echo "9router still broken — check: npm i -g 9router"
+    return 1
+  fi
+}
+
 rotate_log() {
   [ -f "$LOG" ] || return 0
   local size
@@ -126,7 +165,7 @@ monitor() {
   notify "9router watchdog active"
   echo "watchdog awake (pid $$) — checks every ${CHECK_INTERVAL}s, revives if dead. log: $LOG"
 
-  local restarts=0 backoff=1
+  local restarts=0 backoff=1 fails=0 repaired=false
   while true; do
     sleep "$CHECK_INTERVAL"
     rotate_log
@@ -139,8 +178,16 @@ monitor() {
       if wait_ready 15; then
         echo "$(date '+%H:%M:%S') revived (#$restarts)" >>"$LOG"
         notify "9router revived (#$restarts)"
-        restarts=0; backoff=1
+        restarts=0; backoff=1; fails=0
       else
+        fails=$((fails+1))
+        if [ "$fails" -ge 3 ] && [ "$repaired" = false ]; then
+          echo "$(date '+%H:%M:%S') 3 failed revives — repairing 9router install" >>"$LOG"
+          notify "repairing 9router install…"
+          heal_shebang
+          if npm_repair; then R9_BIN=""; resolve_r9; fi
+          repaired=true
+        fi
         backoff=$((backoff*2)); [ "$backoff" -gt 60 ] && backoff=60
         echo "$(date '+%H:%M:%S') revive failed — backing off ${backoff}s" >>"$LOG"
         sleep "$backoff"
@@ -202,7 +249,8 @@ case "${1:-start}" in
   __monitor) monitor ;;
   status)    cmd_status ;;
   logs)      [ -f "$LOG" ] && tail -n "${2:-40}" "$LOG" || echo "no log yet at $LOG" ;;
+  repair)    cmd_repair ;;
   stop)      cmd_stop ;;
   restart)   cmd_stop; sleep 1; cmd_start "--daemon" ;;
-  *)         echo "usage: luciaa-serve [start [--daemon]|status|logs|stop|restart]" ;;
+  *)         echo "usage: luciaa-serve [start [--daemon]|status|logs|repair|stop|restart]" ;;
 esac
