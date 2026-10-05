@@ -128,7 +128,7 @@ bash install.sh --name neo --mode 2
 | `--no-dedup` | skip duplicate cleanup |
 | `--dedup-only` | cleanup and exit |
 | `--no-path` | don't touch shell rc files (PATH) |
-| `--opencode <m>` | `auto` · `official` · `termux` · `skip` |
+| `--opencode <m>` | `auto` · `official` · `termux` · `glibc` · `skip` |
 | `--skip-opencode` | alias for `--opencode skip` |
 
 **Nothing is hard-deleted.** Retired files move to `~/.luciaa-dedup-backup-<timestamp>/` mirroring their original path, so `mv ~/.luciaa-dedup-backup-*/* ~/` undoes it. Paths in directories you cannot write are reported and skipped, never forced.

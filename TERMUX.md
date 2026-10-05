@@ -136,8 +136,32 @@ with a resumable `curl -C -`, and installs it with `dpkg`. It is a drop-in
 |---|---|
 | try upstream, then verify (default) | `--opencode auto` |
 | upstream only | `--opencode official` |
-| Android-native build | `--opencode termux` |
+| Android-native build (no glibc) | `--opencode termux` |
+| **glibc route** — Termux `glibc-repo` + a glibc build | `--opencode glibc` |
 | no opencode here, just 9router + config | `--opencode skip` |
+
+### The glibc route
+
+Termux ships a `glibc-repo` that provides `glibc` and `openssl-glibc`, which
+lets a normally-built (glibc) opencode run on Android instead of needing a
+cross-compiled native build:
+
+```bash
+bash install.sh --opencode glibc
+```
+
+That runs, in order:
+
+```bash
+pkg install -y glibc-repo
+pkg update -y
+pkg install -y glibc openssl-glibc
+# newest opencode-glibc_<ver>_aarch64.deb from Hope2333/opencode-termux
+dpkg -i opencode-glibc_<ver>_aarch64.deb
+```
+
+The newest glibc build is resolved from the release list (`.pkg.tar.xz` assets
+are ignored; only `.deb` is used), and the download is resumable. aarch64 only.
 
 Running 9router on the phone and `opencode` on a computer over LAN is also
 fully supported — pick **mode 2** at the prompt.
@@ -233,7 +257,7 @@ Attach `/tmp/luciaa-diag.txt` to a GitHub issue.
 |---|---|---|
 | `CANNOT LINK EXECUTABLE curl` / SSL symbol error | libcurl/libssl out of sync; `pkg` can't self-repair (curl-based mirror check) | `apt update && apt full-upgrade`; if that fails, `node`-download + `dpkg -i` per [TERMUX.md §2](TERMUX.md) |
 | `9router: bad interpreter: /usr/bin/env` | Termux has no `/usr/bin/env` | installer/watchdog heal the shebang automatically; `luciaa-serve repair` to force |
-| `opencode: cannot execute: required file not found` | upstream build is glibc; Android is bionic | `bash install.sh --opencode termux` — it also retires the dead copy so it cannot shadow the new build on PATH |
+| `opencode: cannot execute: required file not found` | upstream build is glibc; Android is bionic | `bash install.sh --opencode glibc` (Termux glibc-repo) or `--opencode termux` (native build) — both retire the dead copy so it can't shadow the new one |
 | `opencode: command not found` after install | PATH not updated | restart the shell, or `bash install.sh` again (it adds PATH); `--no-path` prints the line |
 | 9router stops when you leave the app | Android froze Termux | battery exclusion + `luciaa-serve start --daemon` + `termux-wake-lock` |
 | `luciaa-serve: command not found` | installer never finished | finish §2, then re-run the installer |

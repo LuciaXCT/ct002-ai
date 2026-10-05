@@ -12,7 +12,7 @@
 #       --no-dedup      skip the duplicate-cleanup pass
 #       --dedup-only    clean duplicates and exit
 #       --no-path       do not touch shell rc files (PATH)
-#       --opencode <m>  auto | official | termux | skip
+#       --opencode <m>  auto | official | termux | glibc | skip
 #       --skip-opencode same as --opencode skip
 #   -h, --help          this help
 #
@@ -475,6 +475,18 @@ fi
 # ─── opencode ──────────────────────────────────────────────────
 opencode_runs() { have opencode && opencode --version >/dev/null 2>&1; }
 
+# The upstream glibc build is usually already on PATH (it installs fine and
+# only fails at exec time) and it sits FIRST, shadowing whatever we install.
+# Retire it — but only if it genuinely fails.
+retire_broken_opencode() {
+  local f
+  for f in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+    { [ -e "$f" ] || [ -L "$f" ]; } || continue
+    "$f" --version >/dev/null 2>&1 && continue
+    rm -f "$f" 2>/dev/null && warn "retired non-working opencode (glibc build): $f"
+  done
+}
+
 install_opencode_official() {
   # The upstream installer draws its OWN progress bar. Do not wrap it in our
   # spinner — two progress displays on one line is exactly the garbled
@@ -509,17 +521,60 @@ install_opencode_termux() {
   fi
   if ! dpkg -i "$out"; then warn "dpkg install failed"; return 1; fi
 
-  # The upstream glibc build is usually already on PATH (it installs fine and
-  # only fails at exec time). It sits FIRST on PATH, so it would shadow the
-  # Android build we just installed. Retire it — but only if it truly fails.
-  local f
-  for f in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
-    { [ -e "$f" ] || [ -L "$f" ]; } || continue
-    "$f" --version >/dev/null 2>&1 && continue
-    rm -f "$f" 2>/dev/null && warn "retired non-working opencode (glibc build): $f"
-  done
+  retire_broken_opencode
 
   pkg install -y ripgrep >/dev/null 2>&1 || true
+  return 0
+}
+
+# Glibc route: Termux ships a `glibc-repo` providing glibc + openssl-glibc,
+# which lets a normally-built (glibc) opencode run on Android. aarch64 only.
+install_opencode_glibc() {
+  local arch; arch="$(uname -m)"
+  if [ "$arch" != "aarch64" ]; then
+    warn "the glibc route is aarch64 only (this is '$arch')"
+    return 1
+  fi
+  have pkg || { warn "pkg not available"; return 1; }
+
+  log "deps" "glibc runtime (Termux glibc-repo)"
+  pkg install -y glibc-repo >/dev/null 2>&1 || { warn "could not install glibc-repo"; return 1; }
+  pkg update -y >/dev/null 2>&1
+  pkg install -y glibc openssl-glibc >/dev/null 2>&1 || { warn "could not install glibc/openssl-glibc"; return 1; }
+  ok "glibc + openssl-glibc installed"
+
+  log "resolve" "newest opencode-glibc build for aarch64"
+  local json urls url ver best="" bestv=""
+  json="$(curl -fsSL https://api.github.com/repos/Hope2333/opencode-termux/releases 2>/dev/null)" \
+    || { warn "release API unreachable"; return 1; }
+  urls="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*opencode-glibc_[^"]*_aarch64\.deb"' | sed 's/.*": *"//;s/"$//')"
+  while IFS= read -r url; do
+    [ -n "$url" ] || continue
+    ver="$(printf '%s' "$url" | sed -n 's|.*opencode-glibc_\([0-9][0-9.]*\)_aarch64\.deb|\1|p')"
+    [ -n "$ver" ] || continue
+    if [ -z "$bestv" ] || [ "$(printf '%s\n%s\n' "$bestv" "$ver" | sort -V | tail -1)" = "$ver" ]; then
+      bestv="$ver"; best="$url"
+    fi
+  done <<EOF
+$urls
+EOF
+  if [ -z "$best" ]; then
+    warn "no glibc build found in the release list — using the known-good pin"
+    best="https://github.com/Hope2333/opencode-termux/releases/download/Push260828/opencode-glibc_1.18.15_aarch64.deb"
+    bestv="1.18.15"
+  fi
+  ok "using opencode-glibc ${bestv}"
+
+  local out="$HOME/.cache/luciaa/$(basename "$best")"
+  mkdir -p "$(dirname "$out")"
+  log "download" "$(basename "$best") — big download; resumable, re-run if it drops"
+  if ! curl -fL --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$out" "$best"; then
+    warn "download failed — re-run to resume (uses curl -C -)"
+    return 1
+  fi
+  if ! dpkg -i "$out"; then warn "dpkg install failed"; return 1; fi
+
+  retire_broken_opencode
   return 0
 }
 
@@ -535,6 +590,7 @@ ensure_opencode() {
   fi
   case "$OPENCODE_MODE" in
     termux)   install_opencode_termux   || warn "native install failed — see TERMUX.md" ;;
+    glibc)    install_opencode_glibc    || warn "glibc install failed — see TERMUX.md" ;;
     official) install_opencode_official || warn "official installer failed" ;;
     auto)
       if [ "$IS_TERMUX" = true ]; then
@@ -555,6 +611,7 @@ ensure_opencode() {
     warn "opencode is installed but does not run here"
     warn "upstream linux-arm64 is glibc; Android uses bionic"
     warn "fix:  bash install.sh --opencode termux   (Android-native build)"
+    warn "   or: bash install.sh --opencode glibc    (Termux glibc-repo + glibc build)"
   else
     warn "opencode installed but not runnable yet"
   fi
