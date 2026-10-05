@@ -45,24 +45,70 @@ CANNOT LINK EXECUTABLE "curl": cannot locate symbol
 export, so the binary cannot start — and `git` (which uses libcurl) fails the
 same way. This is not a luciaa bug; it is a stale Termux package set.
 
-**Fix** (run in order):
+**Why `pkg` can't fix this itself.** `pkg` runs a `curl`-based mirror check
+before doing anything else (`pkg --check-mirror update`), so it dies on the
+broken `curl` and never reaches the upgrade that would repair it. `apt` skips
+that mirror check.
+
+**Fix — try `apt` first:**
 
 ```bash
-pkg update -y && pkg upgrade -y
-
-# if the symbol error persists, force the pair back in sync
-pkg install --reinstall -y openssl libcurl curl
+apt update && apt full-upgrade
 
 # verify — must print a version, not a symbol error
 curl --version
 ```
 
-Then re-run the installer. The installer now checks for this up front and
-stops with this same fix instead of failing later in a confusing place.
+**If `apt` hits the same error**, install the packages directly with `dpkg`,
+downloading them with `node` (node links OpenSSL directly, not libcurl, so it
+keeps working):
 
-> If `pkg upgrade` itself cannot download, you are caught in the same broken
-> libcurl. `pkg install --reinstall -y openssl` alone usually restores the
-> symbol `libcurl` needs; retry `pkg upgrade` afterwards.
+```bash
+cat > /tmp/tx-dl.js <<'JS'
+const https=require('https'),zlib=require('zlib'),fs=require('fs');
+const arch={x64:'x86_64',arm64:'aarch64',arm:'arm',ia32:'i686'}[process.arch]||'aarch64';
+const ROOT='https://packages.termux.dev/apt/termux-main/';
+const INDEX=ROOT+'dists/stable/main/binary-'+arch+'/Packages.gz';
+function get(u){return new Promise((ok,no)=>{https.get(u,r=>{
+  if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){r.resume();return get(new URL(r.headers.location,u).toString()).then(ok,no);}
+  if(r.statusCode!==200){r.resume();return no(new Error(u+' HTTP '+r.statusCode));}
+  const c=[];r.on('data',d=>c.push(d));r.on('end',()=>ok(Buffer.concat(c)));}).on('error',no);});}
+(async()=>{
+  const want=['openssl','libcurl','curl'], pick={};
+  const txt=zlib.gunzipSync(await get(INDEX)).toString();
+  for(const b of txt.split('\n\n')){
+    const p=/^Package: (\S+)/m.exec(b); if(!p||!want.includes(p[1])||pick[p[1]])continue;
+    const f=/^Filename: (\S+)/m.exec(b), v=/^Version: (\S+)/m.exec(b);
+    if(f)pick[p[1]]={file:f[1],version:v?v[1]:'?'};
+  }
+  console.log('arch: '+arch);
+  for(const p of want){
+    if(!pick[p]){console.error('NOT FOUND: '+p);continue;}
+    const buf=await get(ROOT+pick[p].file), name=pick[p].file.split('/').pop();
+    fs.writeFileSync('/tmp/'+name,buf);
+    console.log('saved /tmp/'+name+'  ('+pick[p].version+')');
+  }
+})().catch(e=>{console.error('FAILED: '+e.message);process.exit(1);});
+JS
+
+node /tmp/tx-dl.js
+
+# openssl first, then the curl pair
+dpkg -i /tmp/openssl_*.deb /tmp/libcurl_*.deb /tmp/curl_*.deb
+apt --fix-broken install     # only if dpkg reports unmet deps
+
+curl --version
+```
+
+Then align everything and install luciaa:
+
+```bash
+pkg update -y && pkg upgrade -y
+bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/luciaa/main/install.sh)
+```
+
+The installer also checks for this up front and stops with this same guidance
+instead of failing later in a confusing place.
 
 ---
 
@@ -145,7 +191,7 @@ Attach `/tmp/luciaa-diag.txt` to a GitHub issue.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `CANNOT LINK EXECUTABLE curl` / SSL symbol error | libcurl/libssl out of sync | `pkg update -y && pkg upgrade -y`; then `pkg install --reinstall -y openssl libcurl curl` |
+| `CANNOT LINK EXECUTABLE curl` / SSL symbol error | libcurl/libssl out of sync; `pkg` can't self-repair (curl-based mirror check) | `apt update && apt full-upgrade`; if that fails, `node`-download + `dpkg -i` per [TERMUX.md §2](TERMUX.md) |
 | `9router: bad interpreter: /usr/bin/env` | Termux has no `/usr/bin/env` | installer/watchdog heal the shebang automatically; `luciaa-serve repair` to force |
 | 9router stops when you leave the app | Android froze Termux | battery exclusion + `luciaa-serve start --daemon` + `termux-wake-lock` |
 | `luciaa-serve: command not found` | installer never finished | finish §2, then re-run the installer |
