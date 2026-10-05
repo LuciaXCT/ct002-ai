@@ -16,7 +16,7 @@ resolve_r9() {
   R9_BIN="9router"
 }
 alive() { curl -s -m 5 -o /dev/null "$URL"; }
-start_router() { resolve_r9; nohup $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 &; }
+start_router() { resolve_r9; nohup $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 & }
 notify() { command -v termux-notification >/dev/null 2>&1 && termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1; }
 
 case "${1:-start}" in
