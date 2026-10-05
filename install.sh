@@ -618,6 +618,10 @@ ensure_opencode() {
 }
 
 log "opencode" "checking installation"
+# BEFORE anything else: a dead opencode first on PATH makes `command -v
+# opencode` resolve to it, so we would think it is missing and re-download a
+# 100 MB binary instead of using the working one in $PREFIX/bin.
+retire_broken_opencode
 ensure_opencode
 
 # ─── helpers (installed BEFORE the watchdog needs them) ───────
