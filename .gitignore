@@ -1,0 +1,46 @@
+# ---- secrets: NEVER commit these ----
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.keystore
+id_rsa
+id_ed25519
+auth.json
+**/auth.json
+hosts.yml
+credentials
+.netrc
+.npmrc
+.claude.json
+.machine-id
+cli-secret
+
+# ---- opencode runtime state (project config IS tracked, runtime is not) ----
+.opencode/session/
+.opencode/storage/
+.opencode/log/
+.opencode/cache/
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- backups / temp ----
+*.bak
+*.orig
+*.rej
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- build / deps ----
+node_modules/
+dist/
+build/
+.cache/
+*.o
+*.so
+*.deb
