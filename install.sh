@@ -2,7 +2,7 @@
 
 # luciaa — unfiltered opencode + 9router installer
 # Linux / macOS / Termux / WSL / VPS — portable, zero-friction, auto-heals
-# Run: bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/ct002-ai/main/install.sh)
+# Run: bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/luciaa/main/install.sh)
 
 set -euo pipefail
 
@@ -59,6 +59,8 @@ heal_shebang() {
     sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null && log "healed" "9router shebang for Termux"
   done
 }
+
+have_r9() { resolve_r9; $R9_BIN --version >/dev/null 2>&1; }
 
 # ─── spinner ───────────────────────────────────────────────────
 spin() {
