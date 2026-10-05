@@ -732,14 +732,73 @@ ensure_path
 # ─── 9router + key ─────────────────────────────────────────────
 API_KEY=""
 
-fetch_local_key() {
+# raw /api/keys body using the router's own CLI token, or empty if we have no
+# machine-id/secret pair (first run: dashboard password not set yet).
+router_keys_json() {
   local mid sec tok
   mid=$(cat "$HOME/.9router/machine-id" 2>/dev/null || true)
   sec=$(cat "$HOME/.9router/auth/cli-secret" 2>/dev/null || true)
-  [ -z "$mid" ] && [ -z "$sec" ] && return 1
+  if [ -z "$mid" ] || [ -z "$sec" ]; then return 1; fi
   tok=$(printf '%s9r-cli-auth%s' "$mid" "$sec" | sha256sum | cut -c1-16)
-  curl -s -m 5 -H "x-9r-cli-token: $tok" http://localhost:20128/api/keys 2>/dev/null \
-    | grep -o '"key":"[^"]*"' | head -1 | cut -d'"' -f4
+  curl -s -m 5 -H "x-9r-cli-token: $tok" http://localhost:20128/api/keys 2>/dev/null
+}
+
+fetch_local_key() {
+  router_keys_json 2>/dev/null | grep -o '"key":"[^"]*"' | head -1 | cut -d'"' -f4
+}
+
+# Validate before we write anything to disk.
+#   0 = accepted, 2 = explicitly rejected, 1 = cannot tell (router down)
+# The router's key list is ground truth when reachable. /v1/models returns 200
+# without auth on a fresh router, so it can only ever prove a negative — that's
+# why it is the fallback, not the primary check.
+verify_key() {
+  local k="${1:-}" base="${2:-http://localhost:20128}" body code
+  [ -n "$k" ] || return 1
+  body=$(router_keys_json 2>/dev/null)
+  if [ -n "$body" ] && printf '%s' "$body" | grep -q '"key"'; then
+    printf '%s' "$body" | grep -qF -- "$k" && return 0 || return 2
+  fi
+  code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $k" "$base/v1/models" 2>/dev/null)
+  case "$code" in
+    401|403) return 2 ;;
+    000|'')  return 1 ;;
+    *)       return 0 ;;
+  esac
+}
+
+# Manual entry, used whenever auto-detection fails or comes back empty.
+# Retries up to 3x, never writes an unvalidated key, and never hangs a
+# non-interactive run (--yes / piped stdin just skips it).
+prompt_key_manual() {
+  local base="${1:-http://localhost:20128}" tries=0 k rc
+  if [ "$ASSUME_YES" = true ] || [ ! -t 0 ]; then
+    warn "non-interactive run — skipping manual key entry"
+    warn "set it after install with:  luciaa-serve key --manual"
+    return 1
+  fi
+  printf '%s  router  : %s%s\n' "$D" "$base" "$X"
+  printf '%s  open it in a browser → dashboard → Keys → copy an sk-... key%s\n' "$D" "$X"
+  while [ "$tries" -lt 3 ]; do
+    tries=$((tries + 1))
+    read -rs -p "  paste key (blank to skip): " k; echo
+    if [ -z "$k" ]; then
+      warn "skipped — set it later with: luciaa-serve key --manual"
+      return 1
+    fi
+    verify_key "$k" "$base"; rc=$?
+    if [ "$rc" -eq 2 ]; then
+      warn "router rejected that key (401/403) — attempt $tries/3"
+      continue
+    fi
+    [ "$rc" -eq 1 ] && warn "router unreachable — accepting key unverified"
+    API_KEY="$k"
+    ok "key accepted: $(mask "$k")"
+    return 0
+  done
+  warn "no valid key after 3 attempts — set it later with: luciaa-serve key --manual"
+  return 1
 }
 
 install_9router_local() {
@@ -877,10 +936,10 @@ case "$MODE" in
       ok "found: $(mask "$KEY_AUTO")"
       API_KEY="$KEY_AUTO"
     else
-      warn "auto-fetch failed — 9router may need first-run setup"
-      warn "open http://localhost:20128 in browser, set password, then re-run installer"
-      warn "or add the key later to $TARGET/opencode.json"
-      API_KEY=""
+      warn "auto-fetch failed — the router hasn't issued a key yet"
+      warn "on first run you must set the dashboard password once:"
+      warn "  open http://localhost:20128 → set password → Keys → copy a key"
+      prompt_key_manual "http://localhost:20128" || API_KEY=""
     fi
     ;;
 
@@ -904,12 +963,14 @@ case "$MODE" in
 
     if [ "$ASSUME_YES" = true ]; then
       API_KEY="${LUCIA_API_KEY:-}"
-      [ -z "$API_KEY" ] && warn "no LUCIA_API_KEY provided — edit $TARGET/opencode.json later"
+      if [ -z "$API_KEY" ]; then
+        warn "no LUCIA_API_KEY provided — set it later with: luciaa-serve key --manual"
+      elif ! verify_key "$API_KEY" "$ROUTER_URL"; then
+        warn "LUCIA_API_KEY was not accepted by $ROUTER_URL — writing it anyway"
+        warn "re-check later with: luciaa-serve key"
+      fi
     else
-      printf '%s  paste sk-... key from 9router Keys page%s\n' "$D" "$X"
-      printf '%s  (%s → Keys)%s\n' "$D" "$ROUTER_URL" "$X"
-      read -rs -p "  key: " API_KEY; echo
-      [ -z "$API_KEY" ] && warn "no key — edit $TARGET/opencode.json later"
+      prompt_key_manual "$ROUTER_URL"
     fi
     ;;
 
@@ -959,7 +1020,24 @@ copy_from_src ".opencode/agents/luciaa.md" "$TARGET/agents/luciaa.md" || true
 
 # write key + endpoint
 if [ -n "$API_KEY" ]; then
-  sed -i "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json" 2>/dev/null && ok "api key written"
+  # anchored on the apiKey field, so this also refreshes a STALE key on a re-run
+  # (the old `s|YOUR_9ROUTER_KEY_HERE|...|` silently did nothing if the config
+  #  already held a real value from a previous install).
+  case "$API_KEY" in
+    *[!A-Za-z0-9._-]*)
+      warn "api key contains unexpected characters — not written" ;;
+    *)
+      if sed -i -E 's|("apiKey"[[:space:]]*:[[:space:]]*")[^"]*(")|\1'"$API_KEY"'\2|' \
+           "$TARGET/opencode.json" 2>/dev/null \
+         && grep -q "\"apiKey\"[[:space:]]*:[[:space:]]*\"$API_KEY\"" "$TARGET/opencode.json" 2>/dev/null; then
+        ok "api key written"
+      else
+        warn "api key write failed — set it with: luciaa-serve key --manual"
+      fi ;;
+  esac
+else
+  warn "no api key configured yet"
+  warn "after install, run:  luciaa-serve key --manual   (or --auto to retry the fetch)"
 fi
 if [ "$MODE" = "2" ] && [ -n "$ROUTER_URL" ]; then
   sed -i "s|http://localhost:20128/v1|$ROUTER_URL/v1|" "$TARGET/opencode.json" 2>/dev/null && ok "endpoint: $ROUTER_URL"

@@ -6,11 +6,19 @@
 #
 #   luciaa-serve start            → guard the router in the foreground
 #   luciaa-serve start --daemon   → guard it detached (survives app switch)
-#   luciaa-serve status           → is the router up? is the guard awake?
+#   luciaa-serve status           → is the router up? is the guard awake? key state?
+#   luciaa-serve key              → key status (masked, never printed in full)
+#   luciaa-serve key --auto       → re-fetch the key from the local router
+#   luciaa-serve key --manual     → paste a key by hand, validated before writing
 #   luciaa-serve repair           → fix a half-installed 9router (reinstall)
 #   luciaa-serve logs             → tail the router log
 #   luciaa-serve stop             → stop guard + router
 #   luciaa-serve restart          → bounce both
+#
+# The watchdog also self-heals the api key on a timer: if opencode.json still
+# holds the placeholder, or the stored key starts getting 401s (revoked/rotated),
+# it re-fetches from the router and rewrites the config. No user action needed
+# after the first key ever lands.
 #
 # PORTABLE: the installer rewrites the shebang to $PREFIX/bin/bash on Termux.
 #           Works unchanged on Linux / macOS / WSL / VPS.
@@ -23,6 +31,9 @@ LOG="${LUCIA_ROUTER_LOG:-$HOME/.9router/serve.log}"
 PIDFILE="${LUCIA_ROUTER_PIDFILE:-$HOME/.9router/serve.pid}"
 CHECK_INTERVAL="${LUCIA_WATCHDOG_INTERVAL:-10}"
 MAX_LOG_BYTES="${LUCIA_LOG_MAX_BYTES:-2097152}"
+CONFIG="${LUCIA_CONFIG:-$HOME/.config/opencode/opencode.json}"
+# how many watchdog loops between key re-checks (12 * 10s = ~2min)
+KEY_RECONCILE_EVERY="${LUCIA_KEY_RECONCILE_EVERY:-12}"
 # pattern used to clear a wedged router before reviving it; override if your
 # process name differs and you don't want unrelated matches killed.
 ROUTER_MATCH="${LUCIA_ROUTER_MATCH:-9router}"
@@ -72,6 +83,110 @@ heal_shebang() {
     head -1 "$c" 2>/dev/null | grep -q '^#!/usr/bin/env' || continue
     sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null
   done
+}
+
+# ─── api key ───────────────────────────────────────────────────
+# 9router issues keys from its own dashboard and can rotate or revoke
+# them independently of our config. Three ways the stored key goes bad:
+#   1. the installer never got one (placeholder YOUR_9ROUTER_KEY_HERE)
+#   2. first-run dashboard password was never set, so auto-fetch got nothing
+#   3. the key was later revoked/rotated out from under us
+# All three are recoverable without touching the user, so this runs from the
+# watchdog loop. Nothing here ever prints the key itself, only a masked form.
+
+cfg_base() {  # baseURL from config, scheme+host+port only (strip /v1)
+  [ -f "$CONFIG" ] || { printf 'http://127.0.0.1:%s' "$PORT"; return; }
+  tr -d '\n' < "$CONFIG" 2>/dev/null \
+    | grep -o '"baseURL"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' \
+    | sed -E 's|/v1/?$||' \
+    | grep -E '^https?://' || printf 'http://127.0.0.1:%s' "$PORT"
+}
+
+read_key() {  # current apiKey value as stored (empty if absent)
+  [ -f "$CONFIG" ] || return 1
+  tr -d '\n' < "$CONFIG" 2>/dev/null \
+    | grep -o '"apiKey"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/'
+}
+
+key_is_placeholder() {
+  local k; k=$(read_key)
+  [ -z "$k" ] || [ "${k#YOUR_9ROUTER}" != "$k" ]
+}
+
+# the router's own CLI token: sha256(machine-id + "9r-cli-auth" + secret)
+router_keys_json() {
+  local mid sec tok
+  mid=$(cat "$HOME/.9router/machine-id" 2>/dev/null || true)
+  sec=$(cat "$HOME/.9router/auth/cli-secret" 2>/dev/null || true)
+  if [ -z "$mid" ] || [ -z "$sec" ]; then return 1; fi
+  tok=$(printf '%s9r-cli-auth%s' "$mid" "$sec" | sha256sum | cut -c1-16)
+  curl -s -m 5 -H "x-9r-cli-token: $tok" "http://127.0.0.1:$PORT/api/keys" 2>/dev/null
+}
+
+fetch_local_key() {
+  router_keys_json 2>/dev/null | grep -o '"key":"[^"]*"' | head -1 | cut -d'"' -f4
+}
+
+# 0 = accepted, 2 = explicitly rejected, 1 = cannot tell (router down)
+# Prefer the router's own key list as ground truth; /v1/models happily returns
+# 200 without auth on a fresh router, so it can only prove a *negative*.
+verify_key() {
+  local k="$1" base="${2:-}" body code
+  [ -n "$k" ] || return 1
+  [ -n "$base" ] || base=$(cfg_base)
+  body=$(router_keys_json 2>/dev/null)
+  if [ -n "$body" ] && printf '%s' "$body" | grep -q '"key"'; then
+    printf '%s' "$body" | grep -qF -- "$k" && return 0 || return 2
+  fi
+  code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $k" "$base/v1/models" 2>/dev/null)
+  case "$code" in
+    401|403) return 2 ;;
+    000|'')  return 1 ;;
+    *)       return 0 ;;
+  esac
+}
+
+# replace whatever is in the apiKey field, placeholder or stale value alike.
+# the char whitelist is a sed-injection guard: '&' and '/' are special in the
+# replacement, so refuse anything that isn't a plain key token.
+write_key() {
+  local k="$1"
+  [ -f "$CONFIG" ] || return 1
+  case "$k" in
+    ""|*[!A-Za-z0-9._-]*) return 2 ;;
+  esac
+  grep -q '"apiKey"' "$CONFIG" 2>/dev/null || return 1
+  sed -i -E 's|("apiKey"[[:space:]]*:[[:space:]]*")[^"]*(")|\1'"$k"'\2|' "$CONFIG" 2>/dev/null || return 1
+  chmod 600 "$CONFIG" 2>/dev/null
+  [ "$(read_key)" = "$k" ]
+}
+
+KEY_STATE="unknown"
+reconcile_key() {
+  [ -f "$CONFIG" ] || return 1
+  local cur rc got
+  cur=$(read_key)
+  if [ -n "$cur" ] && [ "${cur#YOUR_9ROUTER}" = "$cur" ]; then
+    verify_key "$cur"; rc=$?
+    case "$rc" in
+      0) KEY_STATE="ok"; return 0 ;;
+      1) KEY_STATE="unknown"; return 0 ;;   # router down — key may be fine
+      2) KEY_STATE="stale" ;;
+    esac
+  else
+    KEY_STATE="placeholder"
+  fi
+
+  got=$(fetch_local_key 2>/dev/null)
+  if [ -n "$got" ] && write_key "$got"; then
+    KEY_STATE="ok"
+    printf '%s api key %s from local 9router\n' "$(date '+%H:%M:%S')" "$KEY_STATE" >>"$LOG"
+    return 0
+  fi
+  return 1
 }
 
 start_router() {
@@ -160,15 +275,44 @@ monitor() {
     termux-wake-lock 2>/dev/null && echo "wake lock held (CPU won't sleep)"
   fi
 
+  # key reconcile, now that the router is (probably) listening. safe to run
+  # before it's up: verify_key reports "cannot tell" and we leave the key be.
+  if reconcile_key; then
+    echo "api key: ok ($KEY_STATE)"
+  else
+    echo "api key: UNRESOLVED ($KEY_STATE) — every model call will 401"
+    echo "         luciaa-serve key --manual   # paste one from the 9router Keys page"
+    notify "luciaa: 9router api key missing"
+  fi
+
   echo "$$" > "$PIDFILE"
   trap 'rm -f "$PIDFILE"; exit 0' INT TERM HUP
   notify "9router watchdog active"
   echo "watchdog awake (pid $$) — checks every ${CHECK_INTERVAL}s, revives if dead. log: $LOG"
 
-  local restarts=0 backoff=1 fails=0 repaired=false
+  local restarts=0 backoff=1 fails=0 repaired=false keywarned=false keyloops=0
   while true; do
     sleep "$CHECK_INTERVAL"
     rotate_log
+
+    # periodic key re-check: catches a key revoked or rotated after install
+    keyloops=$((keyloops + 1))
+    if [ "$keyloops" -ge "$KEY_RECONCILE_EVERY" ]; then
+      keyloops=0
+      if ! reconcile_key; then
+        [ "$keywarned" = false ] && {
+          printf '%s api key unresolved (%s)\n' "$(date '+%H:%M:%S')" "$KEY_STATE" >>"$LOG"
+          notify "luciaa: 9router api key unresolved"
+          keywarned=true
+        }
+      else
+        [ "$keywarned" = true ] && {
+          printf '%s api key recovered\n' "$(date '+%H:%M:%S')" >>"$LOG"
+          keywarned=false
+        }
+      fi
+    fi
+
     if ! alive; then
       restarts=$((restarts+1))
       echo "$(date '+%H:%M:%S') router down — reviving (#$restarts)" >>"$LOG"
@@ -194,6 +338,64 @@ monitor() {
       fi
     fi
   done
+}
+
+cmd_key() {
+  local mode="${1:-status}" cur rc base
+  base=$(cfg_base)
+  case "$mode" in
+    --manual|-m)
+      printf 'router : %s\n' "$base"
+      if [ -t 0 ]; then
+        printf 'open that in a browser, dashboard -> Keys, copy an sk-... key\n'
+        read -rs -p 'paste key (blank to abort): ' cur; echo
+      else
+        # piped/redirected:  printf '%s' sk-... | luciaa-serve key --manual
+        printf 'reading key from stdin (blank to abort): '
+        IFS= read -r cur || cur=""
+      fi
+      [ -z "$cur" ] && { echo "aborted — nothing written"; return 1; }
+      verify_key "$cur" "$base"; rc=$?
+      if [ "$rc" -eq 2 ]; then
+        echo "router REJECTED that key (401/403) — nothing written"
+        return 1
+      fi
+      [ "$rc" -eq 1 ] && echo "! router unreachable — writing unverified, re-check with: luciaa-serve key"
+      write_key "$cur" && echo "key written to $CONFIG" || { echo "write failed (bad chars, or no apiKey field)"; return 1; }
+      ;;
+    --auto)
+      if reconcile_key; then
+        echo "key ok ($KEY_STATE) in $CONFIG"
+      else
+        echo "could not auto-resolve a key ($KEY_STATE)"
+        echo "  the router has not issued one, or the dashboard password was never set"
+        echo "  fix: open $base -> set password -> Keys -> then: luciaa-serve key --manual"
+        return 1
+      fi
+      ;;
+    status|*)
+      cur=$(read_key)
+      case "$cur" in
+        "") echo "key    : MISSING — no apiKey field in config" ;;
+        YOUR_9ROUTER*)
+          echo "key    : PLACEHOLDER — installer never got one"
+          echo "fix    : luciaa-serve key --manual" ;;
+        *)
+          verify_key "$cur" "$base"; rc=$?
+          echo "key    : ${cur:0:8}…${cur: -4}"
+          case "$rc" in
+            0) echo "status : ACCEPTED by router" ;;
+            2) echo "status : REJECTED (401/403) — revoked or rotated"
+               echo "fix    : luciaa-serve key --auto   # re-fetch, or --manual to paste" ;;
+            *) echo "status : router unreachable — cannot verify right now" ;;
+          esac ;;
+      esac
+      echo "config : $CONFIG"
+      echo "router : $base"
+      [ "$mode" != "status" ] && [ "$mode" != "" ] && {
+        echo "usage: luciaa-serve key [status|--auto|--manual]"; return 1; }
+      ;;
+  esac
 }
 
 cmd_start() {
@@ -224,6 +426,13 @@ cmd_start() {
 
 cmd_status() {
   if alive; then echo "router  : UP on :$PORT"; else echo "router  : DOWN"; fi
+  local cur
+  cur=$(read_key)
+  case "$cur" in
+    "")                 echo "key     : MISSING — luciaa-serve key --manual" ;;
+    YOUR_9ROUTER_KEY*)  echo "key     : PLACEHOLDER — luciaa-serve key --manual" ;;
+    *) echo "key     : ${cur:0:8}…${cur: -4}" ;;
+  esac
   if guard_pid; then
     echo "watchdog: running (pid $(cat "$PIDFILE"))"
   else
@@ -250,7 +459,8 @@ case "${1:-start}" in
   status)    cmd_status ;;
   logs)      [ -f "$LOG" ] && tail -n "${2:-40}" "$LOG" || echo "no log yet at $LOG" ;;
   repair)    cmd_repair ;;
+  key)       cmd_key "${2:-status}" ;;
   stop)      cmd_stop ;;
   restart)   cmd_stop; sleep 1; cmd_start "--daemon" ;;
-  *)         echo "usage: luciaa-serve [start [--daemon]|status|logs|repair|stop|restart]" ;;
+  *)         echo "usage: luciaa-serve [start [--daemon]|status|logs|repair|key [status|--auto|--manual]|stop|restart]" ;;
 esac
