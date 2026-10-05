@@ -219,14 +219,16 @@ case "$MODE" in
         ok "router already running (watchdog active)"
       else
         (luciaa-serve start >/dev/null 2>&1 &)
-        sleep 8
-        luciaa-serve status 2>/dev/null | grep -q "router  : UP" && ok "router + watchdog running" || warn "starting — check: luciaa-serve status"
+        log "wait" "giving router time to start (15s)..."
+        sleep 15
+        luciaa-serve status 2>/dev/null | grep -q "router  : UP" && ok "router + watchdog running" || warn "router starting — check: luciaa-serve status"
       fi
     else
       if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
         ok "router already running"
       else
         start_router_bg
+        sleep 5
       fi
     fi
 
@@ -236,16 +238,10 @@ case "$MODE" in
       ok "found: $(mask "$KEY_AUTO")"
       API_KEY="$KEY_AUTO"
     else
-      warn "auto-fetch failed — waiting for 9router to initialize..."
-      sleep 5
-      KEY_AUTO=$(fetch_local_key || true)
-      if [ -n "$KEY_AUTO" ]; then
-        ok "found on retry: $(mask "$KEY_AUTO")"
-        API_KEY="$KEY_AUTO"
-      else
-        warn "could not auto-fetch key — you can add it later: ~/.config/opencode/opencode.json"
-        API_KEY=""
-      fi
+      warn "auto-fetch failed — 9router may need first-run setup"
+      warn "open http://localhost:20128 in browser, set password, then re-run installer"
+      warn "or add key manually later: ~/.config/opencode/opencode.json"
+      API_KEY=""
     fi
     ;;
 
@@ -335,16 +331,20 @@ for AF in "$TARGET/agent/luciaa.md" "$TARGET/agents/luciaa.md"; do
 done
 ok "name baked — 'hey luciaa' greets you as $USERNAME"
 
-# auto-rotate: test combo model
-if [ "$ROTATE" = true ] && [ -n "$API_KEY" ]; then
-  CODE=$(curl -s -m 15 -o /dev/null -w "%{http_code}" -X POST "$ROUTER_URL/v1/chat/completions" \
-    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-    -d '{"model":"my9model-smart","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' 2>/dev/null)
-  if [ "$CODE" = "200" ]; then
-    sed -i 's|"model": "anondark/oc/big-pickle"|"model": "anondark/my9model-smart"|' "$TARGET/opencode.json"
-    ok "auto-rotate ON — default = my9model-smart (verified)"
+# auto-rotate: test combo model (if key available)
+if [ "$ROTATE" = true ]; then
+  if [ -n "$API_KEY" ]; then
+    CODE=$(curl -s -m 15 -o /dev/null -w "%{http_code}" -X POST "$ROUTER_URL/v1/chat/completions" \
+      -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+      -d '{"model":"my9model-smart","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' 2>/dev/null)
+    if [ "$CODE" = "200" ]; then
+      sed -i 's|"model": "luciaa/oc/big-pickle"|"model": "luciaa/my9model-smart"|' "$TARGET/opencode.json"
+      ok "auto-rotate ON — default = my9model-smart (verified)"
+    else
+      warn "combo model not ready (HTTP ${CODE:-timeout}) — default stays big-pickle, combos pickable with 'm'"
+    fi
   else
-    warn "combo model not ready (HTTP ${CODE:-timeout}) — default stays big-pickle, combos pickable with 'm'"
+    ok "auto-rotate: ENABLED — will test combo on first run (run luciaa-doctor --fix later)"
   fi
 else
   ok "auto-rotate OFF — pinned to big-pickle (switch with 'm' in TUI)"
