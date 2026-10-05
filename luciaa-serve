@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # luciaa-serve — watchdog that keeps 9router alive on Android/Termux
 PORT=20128
 URL="http://127.0.0.1:$PORT/v1/models"
