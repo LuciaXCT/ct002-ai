@@ -1,0 +1,18 @@
+#!/bin/bash
+# luciaa-name — change the name luciaa calls you
+N="${1:-}"
+[ -z "$N" ] && { echo "usage: luciaa-name <newname>"; exit 1; }
+D="$HOME/.config/opencode"
+FOUND=0
+for f in "$D/agent/luciaa.md" "$D/agents/luciaa.md"; do
+  [ -f "$f" ] || continue
+  FOUND=1
+  sed -i.bak "s|ALWAYS address them as \*\*[^*]*\*\*|ALWAYS address them as **$N**|" "$f"
+  sed -i.bak "s|{{USER_NAME}}|$N|g" "$f"
+  sed -i.bak "s|locked in for [A-Za-z0-9_]*|locked in for $N|" "$f"
+  sed -i.bak "s|wazzup {{USER_NAME}}|wazzup $N|" "$f"
+  rm -f "$f.bak"
+done
+[ "$FOUND" = 0 ] && { echo "luciaa agent not found — run the luciaa-ai installer first"; exit 1; }
+[ -f "$D/persona.json" ] && sed -i.bak "s|\"address\": \"[^\"]*\"|\"address\": \"$N\"|" "$D/persona.json" && rm -f "$D/persona.json.bak"
+echo "bet — luciaa calls you $N now. restart opencode."

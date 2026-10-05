@@ -352,58 +352,12 @@ fi
 # ─── helpers ───────────────────────────────────────────────────
 log "helpers" "installing luciaa-serve, luciaa-doctor, luciaa-name, luciaa-menu"
 
-# luciaa-serve (watchdog)
-cat > "$TARGET/luciaa-serve" <<'EOF'
-#!/usr/bin/env bash
-PORT=20128; URL="http://127.0.0.1:$PORT/v1/models"; LOG="$HOME/.9router/serve.log"; PIDFILE="$HOME/.9router/serve.pid"
-R9_BIN=""; resolve_r9(){ [ -n "$R9_BIN" ]&&return 0; if command -v 9router>/dev/null 2>&1&&9router --version>/dev/null 2>&1;then R9_BIN="9router";return 0;fi; for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js";do [ -f "$c" ]&&R9_BIN="node $c"&&return 0;done; if command -v npx>/dev/null 2>&1;then R9_BIN="npx -y 9router";return 0;fi; R9_BIN="9router";}
-alive(){ curl -s -m 5 -o /dev/null "$URL";}
-start_router(){ resolve_r9; nohup $R9_BIN --no-browser --skip-update>>"$LOG" 2>&1&;}
-notify(){ command -v termux-notification>/dev/null 2>&1&&termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1;}
-case "${1:-start}" in
-start) mkdir -p "$(dirname "$LOG")"; [ -d "/data/data/com.termux" ]&&for c in "$PREFIX/lib/node_modules/9router/cli.js";do [ -f "$c" ]&&head -1 "$c"|grep -q "^#!/usr/bin/env"&&sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null;done; resolve_r9; [ -f "$PIDFILE" ]&&kill -0 "$(cat "$PIDFILE")" 2>/dev/null&&{ echo "watchdog running (pid $(cat "$PIDFILE"))";exit 0;}; if alive;then echo "router up — watchdog guarding";else start_router;sleep 5;alive&&echo "router started"||echo "router booting — watchdog will revive";fi; command -v termux-wake-lock>/dev/null 2>&1&&termux-wake-lock&&echo "wake lock held"; echo "$$">"$PIDFILE"; trap 'rm -f "$PIDFILE";exit 0' INT TERM; notify "9router watchdog active"; RESTARTS=0; echo "watchdog awake (pid $$) — checks every 10s, log: $LOG"; while true;do sleep 10; if ! alive;then RESTARTS=$((RESTARTS+1));echo "$(date '+%H:%M:%S') router down — reviving (#$RESTARTS)">>"$LOG";pkill -f "9router" 2>/dev/null;sleep 1;start_router;sleep 8;alive&&notify "9router revived (#$RESTARTS)";fi;done;;status) alive&&echo "router  : UP on :$PORT"||echo "router  : DOWN"; [ -f "$PIDFILE" ]&&kill -0 "$(cat "$PIDFILE")" 2>/dev/null&&echo "watchdog: running (pid $(cat "$PIDFILE"))"||echo "watchdog: not running — start: luciaa-serve"; [ -f "$LOG" ]&&echo "recent:"&&tail -5 "$LOG"|sed 's/^/  /';;stop) [ -f "$PIDFILE" ]&&kill "$(cat "$PIDFILE")" 2>/dev/null&&rm -f "$PIDFILE"&&echo "watchdog stopped"||echo "watchdog not running"; pkill -f "9router" 2>/dev/null; command -v termux-wake-unlock>/dev/null 2>&1&&termux-wake-unlock; echo "router stopped";;*) echo "usage: luciaa-serve [start|status|stop]";;esac
-EOF
-chmod +x "$TARGET/luciaa-serve"
-
-# luciaa-doctor
-cat > "$TARGET/luciaa-doctor" <<'EOF'
-#!/usr/bin/env node
-import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
-const HOME=os.homedir(), C=[HOME+'/.config/opencode/opencode.json',HOME+'/.config/opencode/opencode.jsonc'];
-let cfg=null, CFG=C[0]; for(const p of C){if(!fs.existsSync(p))continue;let r=fs.readFileSync(p,'utf8').replace(/\/\*[\s\S]*?\*\//g,'').replace(/^[ \t]*\/\/.*$/gm,'').replace(/,(\s*[}\]])/g,'$1');try{cfg=JSON.parse(r);CFG=p;break}catch{}}if(!cfg){console.log('✗ no config — run installer');process.exit(1);}
-const L=[HOME+'/.config/opencode/config.json',HOME+'/.config/opencode/opencode.jsonc'].filter(p=>fs.existsSync(p)&&p!==CFG);
-if(L.length)console.log('  ! legacy config:',L.join(', ')),console.log('    mv <file> <file>.retired');
-const p=cfg.provider?.anondark; if(!p){console.log('✗ no anondark provider');process.exit(1);}
-const b=(p.options?.baseURL||'').replace(/\/v1\/?$/,''), k=p.options?.apiKey||'';
-try{const c=process.cwd()+'/opencode.json';if(c!==CFG&&fs.existsSync(c)&&fs.readFileSync(c,'utf8').includes('YOUR_9ROUTER_KEY_HERE'))console.log('  ! CWD SHADOW:',c,'has placeholder'),console.log('    fix: cd ~ && opencode');}catch{}
-if(!k||k.includes('YOUR_9ROUTER_KEY_HERE')){console.log('✗ placeholder key in',CFG);console.log('  fix: cd ~ && opencode  OR  paste key in provider.anondark.options.apiKey');process.exit(1);}
-const m=Object.keys(p.models||{}); if(!m.length){console.log('✗ no models');process.exit(1);}
-async function probe(mdl){const t=Date.now();try{const r=await fetch(b+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+k},body:JSON.stringify({model:mdl,messages:[{role:'user',content:'ping'}],max_tokens:1}),signal:AbortSignal.timeout(20000)});const ms=Date.now()-t, bd=await r.json().catch(()=>({})), msg=bd.error?.message||'';if(r.ok)return{mdl,ok:true,ms,tag:'ALIVE',note:''};if(r.status===401||r.status===403||/credential|unauthor|invalid api key/i.test(msg))return{mdl,ok:false,tag:'DEAD CREDS',note:L.length?'invalid creds OR legacy config blocks':'quota demoted'};if(r.status===429)return{mdl,ok:true,ms,tag:'RATE-LIMITED',note:'alive, cooling'};if(r.status>=500)return{mdl,ok:false,tag:'UPSTREAM DOWN',note:msg.slice(0,60)};return{mdl,ok:false,tag:'ERR '+r.status,note:msg.slice(0,60)};}catch(e){return{mdl,ok:false,tag:'TIMEOUT',note:String(e).slice(0,40)}}}
-const cur=(cfg.agent?.anondark?.model||'').replace(/^anondark\//,''), w=Math.max(...m.map(x=>x.length))+2;
-console.log('\n  luciaa-doctor — probing',m.length,'models on',b,'…\n');
-const res=await Promise.all(m.map(probe));
-for(const r of res){const c=r.mdl===cur?'  ← default':'';const cb=/my9model|opencode-free|combo/i.test(r.mdl)?'  [combo]':'';const n=r.note?'  · '+r.note:'';console.log(' '+(r.ok?'✓':'✗')+' '+r.mdl.padEnd(w)+r.tag+cb+c+n);}
-const alive=res.filter(r=>r.ok&&r.ms).sort((a,b)=>a.ms-b.ms);
-if(alive.length)console.log('\n  fastest:',alive[0].mdl,'('+alive[0].ms+'ms)');
-const aliveIds=res.filter(r=>r.ok).map(r=>r.mdl), curR=res.find(r=>r.mdl===cur);
-if(process.argv.includes('--fix')){if(curR&&curR.ok)console.log('  default alive — nothing to fix');else if(aliveIds.length){cfg.agent.anondark.model='anondark/'+aliveIds[0];if(cfg.model!==undefined)cfg.model='anondark/'+aliveIds[0];fs.writeFileSync(CFG,JSON.stringify(cfg,null,2));console.log('  fixed: default → anondark/'+aliveIds[0]+' — restart opencode');}else console.log('  nothing alive — router up? run: 9router');}else if(curR&&!curR.ok&&aliveIds.length)console.log('  default DEAD — run with --fix');
-const ca=res.filter(r=>r.ok&&/my9model|opencode-free|combo/i.test(r.mdl));
-console.log(ca.length?'  auto-rotate: AVAILABLE (use combo model)':'  auto-rotate: combos dead — revive on quota reset');
-console.log('');
-EOF
-chmod +x "$TARGET/luciaa-doctor"
-
-# luciaa-name
-cat > "$TARGET/luciaa-name" <<'EOF'
-#!/bin/bash
-N="${1:-}"; [ -z "$N" ] && { echo "usage: luciaa-name <newname>"; exit 1; }
-D="$HOME/.config/opencode"; F=0
-for f in "$D/agent/luciaa.md" "$D/agents/luciaa.md"; do [ -f "$f" ]||continue; F=1; sed -i "s|ALWAYS address them as \*\*[^*]*\*\*|ALWAYS address them as **$N**|" "$f"; sed -i "s|{{USER_NAME}}|$N|g" "$f"; sed -i "s|locked in for [A-Za-z0-9_]*|locked in for $N|" "$f"; sed -i "s|wazzup {{USER_NAME}}|wazzup $N|" "$f"; done
-[ "$F" = 0 ] && { echo "luciaa agent not found — run installer first"; exit 1; }
-[ -f "$D/persona.json" ] && sed -i "s|\"address\": \"[^\"]*\"|\"address\": \"$N\"|" "$D/persona.json"
-echo "bet — luciaa calls you $N now. restart opencode."
-EOF
-chmod +x "$TARGET/luciaa-name"
+# copy helper scripts from repo
+cp "$REPO_DIR/luciaa-serve" "$TARGET/luciaa-serve"
+cp "$REPO_DIR/luciaa-doctor" "$TARGET/luciaa-doctor"
+cp "$REPO_DIR/luciaa-name" "$TARGET/luciaa-name"
+chmod +x "$TARGET/luciaa-serve" "$TARGET/luciaa-doctor" "$TARGET/luciaa-name"
+ok "helpers copied from repo"
 
 # symlink to PATH
 BIN_DIR="${PREFIX:-}/bin"; [ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR"
@@ -455,4 +409,3 @@ printf '%s   doctor: luciaa-doctor [--fix]%s\n' "$D" "$X"
 printf '%s   rename: luciaa-name <name>%s\n' "$D" "$X"
 printf '%s   key only in %s — never in repo%s\n' "$D" "$TARGET/opencode.json" "$X"
 printf '%s  ██████████████████████████████████%s\n\n' "$G" "$X"
-EOF

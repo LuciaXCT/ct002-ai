@@ -5,7 +5,6 @@
 
 import fs from 'node:fs';
 import os from 'node:os';
-
 import path from 'node:path';
 
 const HOME = os.homedir();
@@ -18,7 +17,6 @@ function loadConfig() {
   for (const p of CANDIDATES) {
     if (!fs.existsSync(p)) continue;
     let raw = fs.readFileSync(p, 'utf8');
-    // jsonc: strip comments + trailing commas so we can JSON.parse it
     raw = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
     raw = raw.replace(/,(\s*[}\]])/g, '$1');
     try {
@@ -34,9 +32,6 @@ if (!cfg) {
   process.exit(1);
 }
 
-// Legacy filenames opencode still reads — a flat provider entry in one of these
-// (baseURL/apiKey at the provider top level) fails validation for the entire
-// config, which surfaces as "Unrecognized keys" or as invalid-credential errors.
 const LEGACY = [
   HOME + '/.config/opencode/config.json',
   HOME + '/.config/opencode/opencode.jsonc',
@@ -56,10 +51,6 @@ if (!prov) {
 const base = (prov.options?.baseURL || '').replace(/\/v1\/?$/, '');
 const key = prov.options?.apiKey || '';
 
-// ─── repo-shadow + placeholder guard (the #1 invalid-key cause) ──
-// opencode merges ./opencode.json when you run INSIDE ~/luciaa-ai.
-// That repo file always holds YOUR_9ROUTER_KEY_HERE by design (never commit keys).
-// Fingers cold on the screen, eyes blurry — you cd wrong and boom, invalid key.
 try {
   const cwdCfg = process.cwd() + '/opencode.json';
   if (cwdCfg !== CFG && fs.existsSync(cwdCfg)) {
@@ -73,7 +64,6 @@ try {
   }
 } catch {}
 if (!key || key.includes('YOUR_9ROUTER_KEY_HERE')) {
-  // _i think: no point probing, every model will scream 401_
   console.log('✗ apiKey is still placeholder in ' + CFG);
   console.log('  fix 1: cd ~ && opencode  (are you inside ~/luciaa-ai right now?)');
   console.log('  fix 2: paste real sk-... from 9router Keys page into provider.luciaa.options.apiKey');
@@ -100,8 +90,6 @@ async function probe(model) {
     const msg = (body && body.error && body.error.message) || '';
     if (r.ok) return { model, ok: true, ms, tag: 'ALIVE', note: '' };
     if (r.status === 401 || r.status === 403 || /credential|unauthor|invalid api key/i.test(msg)) {
-      // A legacy config that fails validation can leave the provider without any
-      // credentials at all, which looks exactly like a quota-demoted key.
       const note = legacyShadows.length
         ? 'invalid creds OR blocked by legacy config — retire ' +
           legacyShadows.map((p) => path.basename(p)).join(', ')

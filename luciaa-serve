@@ -1,64 +1,30 @@
 #!/usr/bin/env bash
 # luciaa-serve — watchdog that keeps 9router alive on Android/Termux
-# why: Android freezes/kills Termux processes seconds after you leave the app
-#      (and the dashboard's memory spike can trip the OOM killer).
-#      This revives the router automatically, forever.
-#
-#   luciaa-serve start    → guard the router (run this INSTEAD of bare `9router`)
-#   luciaa-serve status   → is the router up? is the guard awake?
-#   luciaa-serve stop     → stop guard + router
-#
-# PORTABLE: installer rewrites shebang to $PREFIX/bin/bash on Termux.
-
 PORT=20128
 URL="http://127.0.0.1:$PORT/v1/models"
 LOG="$HOME/.9router/serve.log"
 PIDFILE="$HOME/.9router/serve.pid"
 
-# ─── cross-OS 9router launcher ─────────────────────────────────
-# Termux has no /usr/bin/env so bare `9router` dies with
-# "bad interpreter". Linux/VPS/macOS are fine. Resolve once,
-# reuse everywhere. hands on keyboard, caffeine 3am, screen dim.
 R9_BIN=""
 resolve_r9() {
-  # _i think: cache it, probing every 10s in the loop would stink of fork()_
   [ -n "$R9_BIN" ] && return 0
-  # 1) bare binary works (linux/vps/mac) → use it
-  if command -v 9router >/dev/null 2>&1 && head -1 "$(command -v 9router)" 2>/dev/null | grep -q "node"; then
-    # shebang may still be /usr/bin/env on Termux → test exec
-    if 9router --version >/dev/null 2>&1; then R9_BIN="9router"; return 0; fi
-  fi
-  # 2) node + cli.js directly (Termux proven path) *pop* bypasses shebang
+  if command -v 9router >/dev/null 2>&1 && 9router --version >/dev/null 2>&1; then R9_BIN="9router"; return 0; fi
   for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js"; do
     [ -f "$c" ] && R9_BIN="node $c" && return 0
   done
-  # 3) npx fallback (any OS with npm)
   if command -v npx >/dev/null 2>&1; then R9_BIN="npx -y 9router"; return 0; fi
   R9_BIN="9router"
 }
 alive() { curl -s -m 5 -o /dev/null "$URL"; }
-
-start_router() {
-  resolve_r9
-  # shellcheck disable=SC2086
-  nohup $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 &
-}
-
-notify() {
-  command -v termux-notification >/dev/null 2>&1 && \
-    termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1
-}
+start_router() { resolve_r9; nohup $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 &; }
+notify() { command -v termux-notification >/dev/null 2>&1 && termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1; }
 
 case "${1:-start}" in
   start)
     mkdir -p "$(dirname "$LOG")"
-    # Termux shebang heal — one-time, persistent. fingers dusty from pkg installs.
     if [ -d "/data/data/com.termux" ]; then
-      # _i think: sed the cli.js once and bare 9router works forever_
       for c in "$PREFIX/lib/node_modules/9router/cli.js"; do
-        if [ -f "$c" ] && head -1 "$c" | grep -q "^#!/usr/bin/env"; then
-          sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null && echo "healed 9router shebang for Termux" >>"$LOG"
-        fi
+        [ -f "$c" ] && head -1 "$c" | grep -q "^#!/usr/bin/env" && sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null
       done
     fi
     resolve_r9
