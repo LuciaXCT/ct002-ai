@@ -1,10 +1,26 @@
 #!/usr/bin/env bash
 
-# luciaa — unfiltered opencode + 9router installer
+# luciaa — unfiltered opencode + 9router installer  (v2.2)
 # Linux / macOS / Termux / WSL / VPS — portable, zero-friction, auto-heals
-# Run: bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/luciaa/main/install.sh)
+#
+# Run:   bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/luciaa/main/install.sh)
+#
+# Flags:
+#   -y, --yes           non-interactive (accept every default)
+#       --name <n>      display name (skips the prompt)
+#       --mode <1|2|3>  1=on-device  2=connect  3=skip router setup
+#       --no-dedup      skip the duplicate-cleanup pass
+#       --dedup-only    clean duplicates and exit
+#   -h, --help          this help
+#
+# Env overrides: LUCIA_NAME, LUCIA_MODE, LUCIA_ASSUME_YES=1, LUCIA_NO_DEDUP=1
+#
+# NOTE ON `set -e`: we deliberately run with `set -uo pipefail` and NOT `-e`.
+# Fetching a helper, probing a dead model, or a failed optional `cp` must never
+# abort a half-finished install. Every step that genuinely matters is checked
+# explicitly and routed through `die`.
 
-set -euo pipefail
+set -uo pipefail
 
 # ─── colors ────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -13,9 +29,38 @@ else
   R=""; G=""; Y=""; C=""; B=""; D=""; X=""
 fi
 
-REPO_URL="https://github.com/LuciaXCT/ct002-ai.git"
-REPO_DIR="$HOME/ct002-ai"
+REPO_URL="https://github.com/LuciaXCT/luciaa.git"
+RAW_BASE="https://raw.githubusercontent.com/LuciaXCT/luciaa/main"
+REPO_DIR_LEGACY="$HOME/ct002-ai"
 TARGET="$HOME/.config/opencode"
+
+# ─── args / env ────────────────────────────────────────────────
+ASSUME_YES=false
+DO_DEDUP=true
+DEDUP_ONLY=false
+ARG_NAME=""
+ARG_MODE=""
+[ "${LUCIA_ASSUME_YES:-}" = "1" ] && ASSUME_YES=true
+[ "${LUCIA_NO_DEDUP:-}" = "1" ] && DO_DEDUP=false
+[ -n "${LUCIA_NAME:-}" ] && ARG_NAME="$LUCIA_NAME"
+[ -n "${LUCIA_MODE:-}" ] && ARG_MODE="$LUCIA_MODE"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -y|--yes) ASSUME_YES=true ;;
+    --name) shift; ARG_NAME="${1:-}" ;;
+    --name=*) ARG_NAME="${1#*=}" ;;
+    --mode) shift; ARG_MODE="${1:-}" ;;
+    --mode=*) ARG_MODE="${1#*=}" ;;
+    --no-dedup) DO_DEDUP=false ;;
+    --dedup-only) DEDUP_ONLY=true ;;
+    -h|--help)
+      sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) ;;
+  esac
+  shift
+done
 
 # ─── helpers ───────────────────────────────────────────────────
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -24,10 +69,14 @@ ok()   { printf '%s  ✓ %s%s\n' "$G" "$1" "$X"; }
 warn() { printf '%s  ! %s%s\n' "$Y" "$1" "$X"; }
 err()  { printf '%s  ✗ %s%s\n' "$R" "$1" "$X"; }
 hr()   { printf '%s──────────────────────────────────────────────%s\n' "$D" "$X"; }
+die()  { err "$1"; exit 1; }
 
 ask() {
-  local q="$1" def="${2:-Y}" ans
-  local hint=$([ "$def" = "Y" ] && printf 'Y/n' || printf 'y/N')
+  local q="$1" def="${2:-Y}" ans hint
+  if [ "$ASSUME_YES" = true ]; then
+    [ "$def" = "Y" ] && return 0 || return 1
+  fi
+  [ "$def" = "Y" ] && hint='Y/n' || hint='y/N'
   while true; do
     printf '%s? %s %s[%s]%s ' "$B" "$q" "$D" "$hint" "$X"
     read -r ans || ans=""
@@ -39,28 +88,22 @@ ask() {
 
 mask() { printf '%s…%s' "${1:0:8}" "${1: -4}"; }
 
-# ─── cross-OS 9router resolver ────────────────────────────────
-R9_BIN=""
-resolve_r9() {
-  [ -n "$R9_BIN" ] && return 0
-  if have 9router && 9router --version >/dev/null 2>&1; then R9_BIN="9router"; return 0; fi
-  for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js"; do
-    [ -f "$c" ] && R9_BIN="node $c" && return 0
-  done
-  if have npx; then R9_BIN="npx -y 9router"; return 0; fi
-  R9_BIN="9router"
+realpath_of() {
+  if command -v realpath >/dev/null 2>&1; then realpath -- "$1" 2>/dev/null || printf '%s' "$1"
+  elif command -v python3 >/dev/null 2>&1; then python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || printf '%s' "$1"
+  else printf '%s' "$1"; fi
 }
 
-heal_shebang() {
-  [ -d "/data/data/com.termux" ] || return 0
-  for c in "$PREFIX/lib/node_modules/9router/cli.js"; do
-    [ -f "$c" ] || continue
-    head -1 "$c" | grep -q "^#!/usr/bin/env" || continue
-    sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null && log "healed" "9router shebang for Termux"
-  done
-}
-
-have_r9() { resolve_r9; $R9_BIN --version >/dev/null 2>&1; }
+# ─── detect OS (early — dedup + heals depend on it) ───────────
+IS_TERMUX=false; IS_WSL=false; OS="linux"
+[ -d "/data/data/com.termux" ] && IS_TERMUX=true
+# override for odd setups / testing the Termux path off-device
+[ "${LUCIA_FORCE_TERMUX:-}" = "1" ] && IS_TERMUX=true
+grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=true
+have sw_vers && OS="mac"
+PREFIX="${PREFIX:-}"
+PREFIX_BIN=""
+[ -n "$PREFIX" ] && [ -d "$PREFIX/bin" ] && PREFIX_BIN="$PREFIX/bin"
 
 # ─── spinner ───────────────────────────────────────────────────
 spin() {
@@ -70,6 +113,228 @@ spin() {
     sleep 0.08
   done
   printf '\r\033[K'
+}
+
+# ─── cross-OS 9router resolver ────────────────────────────────
+R9_BIN=""
+resolve_r9() {
+  [ -n "$R9_BIN" ] && return 0
+  if have 9router && 9router --version >/dev/null 2>&1; then R9_BIN="9router"; return 0; fi
+  for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js" "$HOME/.npm-global/lib/node_modules/9router/cli.js" "$HOME/.npm/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] && R9_BIN="node $c" && return 0
+  done
+  if have npx; then R9_BIN="npx -y 9router"; return 0; fi
+  R9_BIN="9router"
+}
+
+# heal a shebang for Termux (no /usr/bin/env, no /bin/bash)
+heal_shebang_file() {
+  local f="$1" h
+  [ -f "$f" ] || return 0
+  [ "$IS_TERMUX" = true ] || return 0
+  h="$(head -1 "$f" 2>/dev/null)"
+  case "$h" in
+    '#!/usr/bin/env bash'|'#!/bin/bash') sed -i "1s|.*|#!$PREFIX/bin/bash|" "$f" 2>/dev/null ;;
+    '#!/usr/bin/env node'|'#!/usr/bin/node') sed -i "1s|.*|#!$PREFIX/bin/env node|" "$f" 2>/dev/null ;;
+  esac
+}
+
+heal_r9_shebang() {
+  [ "$IS_TERMUX" = true ] || return 0
+  local c
+  for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] || continue
+    head -1 "$c" | grep -q '^#!/usr/bin/env' || continue
+    sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null && log "healed" "9router shebang for Termux ($c)"
+  done
+}
+
+have_r9() { resolve_r9; $R9_BIN --version >/dev/null 2>&1; }
+
+wait_for_router() {
+  local url="${1:-http://localhost:20128}" tries="${2:-20}" i=0
+  while [ "$i" -lt "$tries" ]; do
+    curl -s -m 3 -o /dev/null "$url/v1/models" 2>/dev/null && return 0
+    i=$((i+1)); sleep 1
+  done
+  return 1
+}
+
+# ─── source provisioning ───────────────────────────────────────
+# The installer must be able to bootstrap itself from a bare `curl | bash`.
+# It no longer assumes ~/ct002-ai exists — that assumption is what used to
+# abort a fresh install at the first `cp`.
+SRC_DIR=""
+SRC_SELF=""
+[ -n "${BASH_SOURCE[0]:-}" ] && SRC_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+
+resolve_src() {
+  if [ -n "$SRC_SELF" ] && [ -f "$SRC_SELF/luciaa-serve" ] && [ -f "$SRC_SELF/opencode.json" ]; then
+    SRC_DIR="$SRC_SELF"; return 0
+  fi
+  if [ -f "$REPO_DIR_LEGACY/luciaa-serve" ] && [ -f "$REPO_DIR_LEGACY/opencode.json" ]; then
+    SRC_DIR="$REPO_DIR_LEGACY"; return 0
+  fi
+  SRC_DIR="$HOME/.local/share/luciaa/src"
+  log "src" "fetching luciaa sources → $SRC_DIR"
+  if [ -d "$SRC_DIR/.git" ]; then
+    git -C "$SRC_DIR" pull --ff-only -q 2>/dev/null || warn "could not refresh sources (using cached copy)"
+  else
+    mkdir -p "$(dirname "$SRC_DIR")" 2>/dev/null
+    git clone --depth 1 -q "$REPO_URL" "$SRC_DIR" 2>/dev/null || warn "clone failed — falling back to raw downloads"
+  fi
+}
+
+# copy a repo-relative file to a destination, from the clone or from raw GitHub.
+# never returns non-zero in a way that aborts the run.
+copy_from_src() {
+  local rel="$1" dest="$2" mode="${3:-}"
+  if [ -n "$SRC_DIR" ] && [ -f "$SRC_DIR/$rel" ]; then
+    if cp "$SRC_DIR/$rel" "$dest" 2>/dev/null; then
+      [ -n "$mode" ] && chmod "$mode" "$dest" 2>/dev/null
+      return 0
+    fi
+  fi
+  if curl -fsSL "$RAW_BASE/$rel" -o "$dest" 2>/dev/null; then
+    [ -n "$mode" ] && chmod "$mode" "$dest" 2>/dev/null
+    return 0
+  fi
+  return 1
+}
+
+# ─── duplicate cleanup (runs BEFORE installation) ─────────────
+BACKUP_ROOT=""
+ensure_backup_root() {
+  [ -n "$BACKUP_ROOT" ] && return 0
+  BACKUP_ROOT="$HOME/.luciaa-dedup-backup-$(date +%Y%m%d%H%M%S)"
+}
+
+retire() {
+  local p="$1" br d
+  [ -e "$p" ] || [ -L "$p" ] || return 0
+  d="$(dirname "$p")"
+  [ -w "$d" ] || { warn "skipped (not writable): $p"; return 1; }
+  ensure_backup_root
+  br="$BACKUP_ROOT"
+  mkdir -p "$br/$(dirname "${p#/}")" 2>/dev/null
+  if mv "$p" "$br/${p#/}" 2>/dev/null; then
+    ok "retired duplicate: $p"
+    return 0
+  fi
+  warn "could not retire: $p"
+  return 1
+}
+
+dedup_config_shadows() {
+  local f
+  for f in "$TARGET/opencode.jsonc" "$TARGET/config.json"; do
+    [ -f "$f" ] || continue
+    retire "$f" && warn "legacy config was shadowing opencode.json"
+  done
+}
+
+dedup_helper_symlinks() {
+  local b d
+  for b in "$PREFIX_BIN" "$HOME/.local/bin"; do
+    [ -n "$b" ] || continue
+    for d in luciaa-serve luciaa-doctor luciaa-name luciaa-menu ct002-serve ct002-doctor ct002-name ct002-persona; do
+      [ -L "$b/$d" ] || continue
+      [ -e "$b/$d" ] && continue
+      retire "$b/$d" >/dev/null 2>&1 && ok "removed broken symlink: $b/$d"
+    done
+  done
+}
+
+dedup_opencode() {
+  log "dedup" "scanning for duplicate opencode installs"
+  local -a cands=()
+  local p rp
+  while IFS= read -r p; do
+    p="${p% }"; [ -n "$p" ] && cands+=("$p")
+  done < <(type -a opencode 2>/dev/null | sed -n 's/^opencode is //p')
+  for p in "$PREFIX/bin/opencode" "$HOME/.local/bin/opencode" "$HOME/.opencode/bin/opencode" "/usr/local/bin/opencode" "$HOME/.npm-global/bin/opencode" "$HOME/bin/opencode"; do
+    { [ -e "$p" ] || [ -L "$p" ]; } && cands+=("$p")
+  done
+
+  [ "${#cands[@]}" -eq 0 ] && { ok "no opencode installs found — installer will add one"; return 0; }
+
+  local keep_path="" keep_real=""
+  for p in "${cands[@]}"; do
+    { [ -e "$p" ] || [ -L "$p" ]; } || continue
+    [ -z "$keep_real" ] || continue
+    keep_path="$p"; keep_real="$(realpath_of "$p")"
+  done
+  [ -z "$keep_real" ] && return 0
+  ok "keeping opencode: $keep_path"
+
+  local removed=0
+  for p in "${cands[@]}"; do
+    { [ -e "$p" ] || [ -L "$p" ]; } || continue
+    [ "$p" = "$keep_path" ] && continue
+    rp="$(realpath_of "$p")"
+    if [ "$rp" = "$keep_real" ]; then
+      retire "$p" && removed=$((removed+1))
+    else
+      retire "$p" && removed=$((removed+1))
+    fi
+  done
+  [ "$removed" -gt 0 ] && warn "$removed duplicate opencode path(s) retired to ${BACKUP_ROOT:-backup}" || ok "no duplicate opencode binaries"
+}
+
+dedup_9router() {
+  log "dedup" "scanning for duplicate 9router installs"
+  local -a clis=()
+  local c p keep="" removed=0
+  for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.npm-global/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js" "$HOME/.npm/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] && clis+=("$c")
+  done
+  [ "${#clis[@]}" -le 1 ] && { ok "single 9router install (${clis[0]:-none})"; return 0; }
+  for c in "${clis[@]}"; do
+    [ -z "$keep" ] && { keep="$c"; continue; }
+    retire "$(dirname "$(dirname "$c")")/9router" && removed=$((removed+1))
+  done
+  # retire dangling 9router bin shims left behind
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -e "$p" ] || retire "$p" >/dev/null 2>&1
+  done < <(type -a 9router 2>/dev/null | sed -n 's/^9router is //p')
+  [ "$removed" -gt 0 ] && warn "$removed duplicate 9router install(s) retired" || ok "no duplicate 9router trees"
+}
+
+dedup_npm_globals() {
+  have npm || return 0
+  local out
+  out="$(npm ls -g --depth=0 2>/dev/null | grep -oE '(opencode-ai|@opencode/[a-z-]+|9router)@[0-9][^ ]*' | sort -u)"
+  [ -z "$out" ] && return 0
+  local pkg
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    case "$pkg" in
+      opencode-ai@*|@opencode/*)
+        if have opencode; then
+          warn "global npm package $pkg duplicates your opencode binary"
+          npm rm -g "$(printf '%s' "$pkg" | sed 's/@[0-9].*$//')" >/dev/null 2>&1 \
+            && ok "removed global npm $pkg" || warn "could not remove $pkg (keep it if you rely on it)"
+        fi ;;
+    esac
+  done <<< "$out"
+}
+
+run_dedup() {
+  hr
+  log "dedup" "removing duplicate installs before we build anything"
+  dedup_config_shadows
+  dedup_helper_symlinks
+  dedup_opencode
+  dedup_9router
+  dedup_npm_globals
+  if [ -n "$BACKUP_ROOT" ]; then
+    ok "backups kept at: $BACKUP_ROOT"
+    ok "undo with: mv $BACKUP_ROOT/* ~/   (paths are mirrored)"
+  else
+    ok "nothing to clean"
+  fi
+  hr
 }
 
 # ─── banner ────────────────────────────────────────────────────
@@ -84,46 +349,67 @@ cat <<'ART'
       ╚═══╝  ╚═╝  ╚═════╝ ╚═╝  ╚═══╝
 ART
 printf '%s\n' "$X"
-printf '%s   luciaa · unfiltered opencode + adult · v2.1%s\n\n' "$B" "$X"
+printf '%s   luciaa · unfiltered opencode + adult · v2.2%s\n\n' "$B" "$X"
 
-# ─── detect OS ────────────────────────────────────────────────
-IS_TERMUX=false; IS_WSL=false; OS="linux"
-[ -d "/data/data/com.termux" ] && IS_TERMUX=true
-grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=true
-have sw_vers && OS="mac"
+OS_LABEL="Linux"
+[ "$OS" = "mac" ] && OS_LABEL="macOS"
+[ "$IS_WSL" = true ] && OS_LABEL="WSL ($OS)"
+[ "$IS_TERMUX" = true ] && OS_LABEL="Termux (Android)"
+log "os" "$OS_LABEL"
 
-log "os" "$( [ "$IS_TERMUX" = true ] && echo "Termux (Android)" || [ "$IS_WSL" = true ] && echo "WSL ($OS)" || [ "$OS" = "mac" ] && echo "macOS" || echo "Linux" )"
+resolve_src
+[ -n "$SRC_DIR" ] && ok "sources: $SRC_DIR" || warn "sources: raw GitHub fallback"
+
+# ─── dedup (before installation) ──────────────────────────────
+if [ "$DO_DEDUP" = true ]; then
+  run_dedup
+else
+  warn "duplicate cleanup skipped (--no-dedup)"
+fi
+
+if [ "$DEDUP_ONLY" = true ]; then
+  hr; ok "dedup-only requested — done"; hr; exit 0
+fi
 
 # ─── name ──────────────────────────────────────────────────────
-printf '%sWhat should luciaa call you?%s\n' "$B" "$X"
-printf '%s  (shows up every time you say "hey luciaa")%s\n' "$D" "$X"
-printf '? name %s[luciaa]%s: ' "$D" "$X"
-read -r USERNAME || USERNAME=""
+USERNAME="$ARG_NAME"
+if [ -z "$USERNAME" ]; then
+  if [ "$ASSUME_YES" = true ]; then
+    USERNAME="luciaa"
+  else
+    printf '%sWhat should luciaa call you?%s\n' "$B" "$X"
+    printf '%s  (shows up every time you say "hey luciaa")%s\n' "$D" "$X"
+    printf '? name %s[luciaa]%s: ' "$D" "$X"
+    read -r USERNAME || USERNAME=""
+  fi
+fi
 USERNAME=${USERNAME:-luciaa}
 USERNAME=${USERNAME//\"/}
 printf '%s  preview: %s[🤑luciaa] wazzup %s 😭✌️ what are we cooking%s\n\n' "$D" "$G" "$USERNAME" "$X"
 
 # ─── mode ──────────────────────────────────────────────────────
-printf '%sWhere should the AI brain live?%s\n' "$B" "$X"
-if [ "$IS_WSL" = true ] && have opencode && opencode --version 2>/dev/null | grep -q "arena"; then
-  printf '  %s1)%s %s on-device%s — NOT recommended (arena binary, no local 9router)\n' "$Y" "$X" "$B" "$X"
-  printf '  %s2)%s %s connect%s   — RECOMMENDED: opencode here, 9router on phone/VPS\n' "$Y" "$X" "$B" "$X"
-  printf '  %s3)%s %s skip%s      — config only, already have router URL + key\n' "$Y" "$X" "$B" "$X"
-else
-  printf '  %s1)%s %s on-device%s — opencode + 9router HERE (offline-capable, free models)\n' "$Y" "$X" "$B" "$X"
-  printf '  %s2)%s %s connect%s   — opencode here, 9router on another machine (LAN/VPS)\n' "$Y" "$X" "$B" "$X"
-  printf '  %s3)%s %s skip%s      — config only, already have router URL + key\n' "$Y" "$X" "$B" "$X"
+MODE="$ARG_MODE"
+if [ -z "$MODE" ]; then
+  if [ "$ASSUME_YES" = true ]; then
+    MODE=1
+  else
+    printf '%sWhere should the AI brain live?%s\n' "$B" "$X"
+    if [ "$IS_WSL" = true ] && have opencode && opencode --version 2>/dev/null | grep -q "arena"; then
+      printf '  %s1)%s %s on-device%s — NOT recommended (arena binary, no local 9router)\n' "$Y" "$X" "$B" "$X"
+      printf '  %s2)%s %s connect%s   — RECOMMENDED: opencode here, 9router on phone/VPS\n' "$Y" "$X" "$B" "$X"
+      printf '  %s3)%s %s skip%s      — config only, already have router URL + key\n' "$Y" "$X" "$B" "$X"
+    else
+      printf '  %s1)%s %s on-device%s — opencode + 9router HERE (offline-capable, free models)\n' "$Y" "$X" "$B" "$X"
+      printf '  %s2)%s %s connect%s   — opencode here, 9router on another machine (LAN/VPS)\n' "$Y" "$X" "$B" "$X"
+      printf '  %s3)%s %s skip%s      — config only, already have router URL + key\n' "$Y" "$X" "$B" "$X"
+    fi
+    printf '? choice %s[1]%s: ' "$D" "$X"
+    read -r MODE || MODE=""
+  fi
 fi
-MODE=""
-while true; do
-  printf '? choice %s[1]%s: ' "$D" "$X"
-  read -r MODE || MODE=""
-  MODE=${MODE:-1}
-  case "$MODE" in 1|2|3) break ;; esac
-  warn "pick 1, 2, or 3"
-done
-
-[ "$IS_TERMUX" = true ] && [ "$MODE" = "1" ] && MODE=1
+MODE=${MODE:-1}
+case "$MODE" in 1|2|3) ;; *) warn "unknown mode '$MODE' — falling back to 1"; MODE=1 ;; esac
+[ "$IS_TERMUX" = true ] && [ "$MODE" = "2" ] && warn "Termux + remote router: fine, make sure the router host is reachable"
 ROUTER_URL="http://localhost:20128"
 
 # ─── deps ──────────────────────────────────────────────────────
@@ -135,13 +421,13 @@ if [ -n "$MISSING" ]; then
   warn "missing: $MISSING"
   if ask "install now?"; then
     if [ "$IS_TERMUX" = true ]; then
-      pkg update -y >/dev/null 2>&1 & spin "pkg update" $!; wait $!
-      pkg install -y $MISSING >/dev/null 2>&1 && ok "installed: $MISSING" || err "pkg failed — run: pkg install $MISSING"
+      (pkg update -y >/dev/null 2>&1) & spin "pkg update" $!; wait $! 2>/dev/null
+      pkg install -y $MISSING >/dev/null 2>&1 && ok "installed: $MISSING" || warn "pkg failed — run: pkg install $MISSING"
     elif [ "$OS" = "mac" ]; then
-      brew install $MISSING >/dev/null 2>&1 && ok "installed: $MISSING" || err "brew failed"
+      brew install $MISSING >/dev/null 2>&1 && ok "installed: $MISSING" || warn "brew failed"
     else
-      sudo apt-get update -y >/dev/null 2>&1 & spin "apt update" $!; wait $!
-      sudo apt-get install -y $MISSING >/dev/null 2>&1 && ok "installed: $MISSING" || err "apt failed — run: sudo apt install $MISSING"
+      (sudo apt-get update -y >/dev/null 2>&1) & spin "apt update" $!; wait $! 2>/dev/null
+      sudo apt-get install -y $MISSING >/dev/null 2>&1 && ok "installed: $MISSING" || warn "apt failed — run: sudo apt install $MISSING"
     fi
   else
     warn "continuing without — may fail later"
@@ -155,16 +441,45 @@ log "opencode" "checking installation"
 if have opencode; then
   VER=$(opencode --version 2>/dev/null | head -1)
   ok "found: $VER"
-  [ "$IS_WSL" = true ] && echo "$VER" | grep -q "arena" && ok "arena binary — recommend mode 2 or 3"
+  [ "$IS_WSL" = true ] && echo "$VER" | grep -q "arena" && warn "arena binary — recommend mode 2 or 3"
 else
   if ask "opencode not found — install now?" Y; then
-    curl -fsSL https://opencode.ai/install | bash & spin "installing opencode" $!
-    wait $! && ok "opencode installed" || { err "failed — see https://opencode.ai/docs"; exit 1; }
+    (curl -fsSL https://opencode.ai/install | bash) & spin "installing opencode" $!; wait $! 2>/dev/null
     export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
+    have opencode && ok "opencode installed" || die "opencode install failed — see https://opencode.ai/docs"
   else
-    err "opencode required"; exit 1
+    die "opencode required"
   fi
 fi
+
+# ─── helpers (installed BEFORE the watchdog needs them) ───────
+# Ordering matters: the old installer started `luciaa-serve` on Termux before
+# the helper existed, so the guard silently failed and 9router was left
+# unguarded ("9router keeps dying").
+mkdir -p "$TARGET/agent" "$TARGET/agents"
+log "helpers" "installing luciaa-serve, luciaa-doctor, luciaa-name"
+HELPERS_OK=false
+for h in luciaa-serve luciaa-doctor luciaa-name; do
+  if copy_from_src "$h" "$TARGET/$h" 755; then
+    heal_shebang_file "$TARGET/$h"
+    ok "installed $h"
+    [ "$h" = "luciaa-serve" ] && HELPERS_OK=true
+  else
+    warn "could not install $h"
+  fi
+done
+if [ -f "$SRC_DIR/ct002-menu.mjs" ]; then
+  cp "$SRC_DIR/ct002-menu.mjs" "$TARGET/luciaa-menu" 2>/dev/null && chmod +x "$TARGET/luciaa-menu" 2>/dev/null
+fi
+
+BIN_DIR="$PREFIX_BIN"; [ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR"
+for h in luciaa-serve luciaa-doctor luciaa-name; do
+  [ -f "$TARGET/$h" ] || continue
+  ln -sf "$TARGET/$h" "$BIN_DIR/$h"
+done
+[ -f "$TARGET/luciaa-menu" ] && ln -sf "$TARGET/luciaa-menu" "$BIN_DIR/luciaa-menu"
+case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not in PATH — add: export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
+ok "helpers linked in $BIN_DIR"
 
 # ─── 9router + key ─────────────────────────────────────────────
 API_KEY=""
@@ -182,28 +497,52 @@ fetch_local_key() {
 install_9router_local() {
   if ! have npm; then
     if [ "$IS_TERMUX" = true ]; then
-      ask "install nodejs via pkg?" Y && pkg install -y nodejs >/dev/null 2>&1 || { err "nodejs needed"; exit 1; }
+      ask "install nodejs via pkg?" Y && pkg install -y nodejs >/dev/null 2>&1 || die "nodejs needed"
     else
-      err "npm missing — install Node.js first (https://nodejs.org)"; exit 1
+      die "npm missing — install Node.js first (https://nodejs.org)"
     fi
   fi
-  npm i -g 9router@latest --prefer-online >/dev/null 2>&1 & spin "npm i -g 9router@latest --prefer-online" $!
-  wait $! && ok "9router installed (latest)" || { err "npm install failed"; exit 1; }
-  heal_shebang; resolve_r9
+  (npm i -g 9router@latest --prefer-online >/dev/null 2>&1) & spin "npm i -g 9router@latest --prefer-online" $!; wait $! 2>/dev/null
+  if have_r9; then
+    ok "9router installed (latest)"
+  else
+    warn "npm global install did not expose 9router — trying npx runtime"
+    resolve_r9
+  fi
+  heal_r9_shebang
 }
 
 start_router_bg() {
   resolve_r9
-  heal_shebang
-  nohup $R9_BIN --no-browser --skip-update >/dev/null 2>&1 &
-  sleep 3
-  curl -s -m 5 -o /dev/null http://localhost:20128/v1/models && ok "router up on :20128" || warn "router starting — check in 10s: curl http://localhost:20128/v1/models"
+  heal_r9_shebang
+  mkdir -p "$HOME/.9router" 2>/dev/null
+  if command -v setsid >/dev/null 2>&1; then
+    setsid $R9_BIN --no-browser --skip-update >>"$HOME/.9router/serve.log" 2>&1 &
+  else
+    nohup $R9_BIN --no-browser --skip-update >>"$HOME/.9router/serve.log" 2>&1 &
+  fi
+  disown 2>/dev/null
+  wait_for_router "http://localhost:20128" 20 && ok "router up on :20128" || warn "router starting — check in 10s: curl http://localhost:20128/v1/models"
+}
+
+start_watchdog() {
+  # prefer the installed helper; fall back to the source copy so this works
+  # even if the symlink step was skipped. `--daemon` is essential: a plain
+  # backgrounded `&` watchdog dies with SIGHUP when this installer exits.
+  local wd="" c
+  for c in "$BIN_DIR/luciaa-serve" "$TARGET/luciaa-serve" "$SRC_DIR/luciaa-serve"; do
+    [ -f "$c" ] && { wd="$c"; break; }
+  done
+  [ -z "$wd" ] && { warn "watchdog script missing — cannot guard the router"; return 1; }
+  bash "$wd" start --daemon >/dev/null 2>&1
+  sleep 1
+  return 0
 }
 
 case "$MODE" in
   1)
     log "9router" "local installation + auto-start (unattended)"
-    heal_shebang
+    heal_r9_shebang
     resolve_r9
     if have_r9; then
       ok "9router already installed"
@@ -214,21 +553,23 @@ case "$MODE" in
 
     if [ "$IS_TERMUX" = true ]; then
       log "watchdog" "Termux detected — starting luciaa-serve (auto)"
-      if have luciaa-serve; then ok "watchdog already installed"; else ok "will install with helpers"; fi
-      if luciaa-serve status 2>/dev/null | grep -q "router  : UP"; then
+      if "$BIN_DIR/luciaa-serve" status 2>/dev/null | grep -q "router  : UP"; then
         ok "router already running (watchdog active)"
       else
-        (luciaa-serve start >/dev/null 2>&1 &)
-        log "wait" "giving router time to start (15s)..."
-        sleep 15
-        luciaa-serve status 2>/dev/null | grep -q "router  : UP" && ok "router + watchdog running" || warn "router starting — check: luciaa-serve status"
+        start_watchdog
+        log "wait" "giving router time to start..."
+        if wait_for_router "http://localhost:20128" 30; then
+          ok "router + watchdog running"
+        else
+          warn "router still booting — check: luciaa-serve status"
+        fi
       fi
+      command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null && ok "wake lock held"
     else
-      if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
+      if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models 2>/dev/null; then
         ok "router already running"
       else
         start_router_bg
-        sleep 5
       fi
     fi
 
@@ -240,7 +581,7 @@ case "$MODE" in
     else
       warn "auto-fetch failed — 9router may need first-run setup"
       warn "open http://localhost:20128 in browser, set password, then re-run installer"
-      warn "or add key manually later: ~/.config/opencode/opencode.json"
+      warn "or add the key later to $TARGET/opencode.json"
       API_KEY=""
     fi
     ;;
@@ -248,21 +589,30 @@ case "$MODE" in
   2)
     log "remote router" "connect to existing 9router"
     [ "$IS_WSL" = true ] && printf '%s  Phone running 9router? Use LAN IP (http://192.168.x.x:20128)%s\n' "$D" "$X"
-    printf '? router URL %s[http://localhost:20128]%s: ' "$D" "$X"
-    read -r ROUTER_URL || ROUTER_URL=""
-    ROUTER_URL=${ROUTER_URL:-http://localhost:20128}
+    if [ -n "$ARG_NAME" ] || [ "$ASSUME_YES" = true ]; then
+      ROUTER_URL="${LUCIA_ROUTER_URL:-http://localhost:20128}"
+    else
+      printf '? router URL %s[http://localhost:20128]%s: ' "$D" "$X"
+      read -r ROUTER_URL || ROUTER_URL=""
+      ROUTER_URL=${ROUTER_URL:-http://localhost:20128}
+    fi
 
-    if curl -s -m 5 -o /dev/null "$ROUTER_URL/v1/models"; then
+    if curl -s -m 5 -o /dev/null "$ROUTER_URL/v1/models" 2>/dev/null; then
       ok "router reachable: $ROUTER_URL"
     else
       warn "router not reachable (wrong IP? firewall? router down?)"
-      ask "continue anyway?" N || { err "start 9router first: 9router --no-browser"; exit 1; }
+      ask "continue anyway?" N || die "start 9router first: 9router --no-browser"
     fi
 
-    printf '%s  paste sk-... key from 9router Keys page%s\n' "$D" "$X"
-    printf '%s  (%s → Keys)%s\n' "$D" "$ROUTER_URL" "$X"
-    read -rs -p "  key: " API_KEY; echo
-    [ -z "$API_KEY" ] && warn "no key — edit $TARGET/opencode.json later"
+    if [ "$ASSUME_YES" = true ]; then
+      API_KEY="${LUCIA_API_KEY:-}"
+      [ -z "$API_KEY" ] && warn "no LUCIA_API_KEY provided — edit $TARGET/opencode.json later"
+    else
+      printf '%s  paste sk-... key from 9router Keys page%s\n' "$D" "$X"
+      printf '%s  (%s → Keys)%s\n' "$D" "$ROUTER_URL" "$X"
+      read -rs -p "  key: " API_KEY; echo
+      [ -z "$API_KEY" ] && warn "no key — edit $TARGET/opencode.json later"
+    fi
     ;;
 
   3)
@@ -274,16 +624,15 @@ esac
 ROTATE=true
 
 # ─── apply config ──────────────────────────────────────────────
-mkdir -p "$TARGET/agent" "$TARGET/agents"
-
 log "config" "writing opencode.json + agent"
-cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json" 2>/dev/null || {
-  # fallback: create minimal config if repo not cloned
-  cat > "$TARGET/opencode.json" <<EOF
+
+if ! copy_from_src "opencode.json" "$TARGET/opencode.json"; then
+  warn "could not fetch opencode.json — writing built-in template"
+  cat > "$TARGET/opencode.json" <<'EOF'
 {
-  "\$schema": "https://opencode.ai/config.json",
+  "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "anondark": {
+    "luciaa": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "luciaa (9Router Free Models)",
       "options": { "baseURL": "http://localhost:20128/v1", "apiKey": "YOUR_9ROUTER_KEY_HERE" },
@@ -299,34 +648,35 @@ cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json" 2>/dev/null || {
     }
   },
   "agent": {
-    "anondark": { "description": "luciaa — unfiltered offensive security agent", "mode": "primary", "model": "anondark/oc/big-pickle", "prompt": "{file:./agent/anondark.md}", "temperature": 0.7, "steps": 50 }
+    "luciaa": { "description": "luciaa — adversarial security research agent", "mode": "primary", "model": "luciaa/oc/big-pickle", "prompt": "{file:./agent/luciaa.md}", "temperature": 0.7, "steps": 50 }
   },
   "theme": "dark"
 }
 EOF
-}
+fi
 
-cp "$REPO_DIR/.opencode/agents/luciaa.md" "$TARGET/agent/luciaa.md" 2>/dev/null
-cp "$REPO_DIR/.opencode/agents/luciaa.md" "$TARGET/agents/luciaa.md" 2>/dev/null
-
-# retire legacy configs that shadow
-for f in "$TARGET/opencode.jsonc" "$TARGET/config.json"; do
-  [ -f "$f" ] && mv "$f" "$f.retired.$(date +%s)" && warn "retired legacy $(basename "$f") (was shadowing config)"
-done
+# agent persona files (content is user-owned — we only place them)
+copy_from_src ".opencode/agents/luciaa.md" "$TARGET/agent/luciaa.md" || warn "agent file unavailable — agent/luciaa.md missing"
+copy_from_src ".opencode/agents/luciaa.md" "$TARGET/agents/luciaa.md" || true
 
 # write key + endpoint
-[ -n "$API_KEY" ] && sed -i "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json" && ok "api key written"
-[ "$MODE" = "2" ] && [ -n "$ROUTER_URL" ] && sed -i "s|http://localhost:20128/v1|$ROUTER_URL/v1|" "$TARGET/opencode.json" && ok "endpoint: $ROUTER_URL"
+if [ -n "$API_KEY" ]; then
+  sed -i "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json" 2>/dev/null && ok "api key written"
+fi
+if [ "$MODE" = "2" ] && [ -n "$ROUTER_URL" ]; then
+  sed -i "s|http://localhost:20128/v1|$ROUTER_URL/v1|" "$TARGET/opencode.json" 2>/dev/null && ok "endpoint: $ROUTER_URL"
+fi
+chmod 600 "$TARGET/opencode.json" 2>/dev/null
 
 # persona.json
 cat > "$TARGET/persona.json" <<EOF
-{ "name": "luciaa", "team": "luciaa", "address": "$USERNAME", "version": "2.1.0" }
+{ "name": "luciaa", "team": "luciaa", "address": "$USERNAME", "version": "2.2.0" }
 EOF
 ok "persona.json → hello, $USERNAME"
 
 # bake name into agent
 for AF in "$TARGET/agent/luciaa.md" "$TARGET/agents/luciaa.md"; do
-  [ -f "$AF" ] && sed -i "s|{{USER_NAME}}|$USERNAME|g" "$AF"
+  [ -f "$AF" ] && sed -i "s|{{USER_NAME}}|$USERNAME|g" "$AF" 2>/dev/null
 done
 ok "name baked — 'hey luciaa' greets you as $USERNAME"
 
@@ -337,7 +687,7 @@ if [ "$ROTATE" = true ]; then
       -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
       -d '{"model":"my9model-smart","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' 2>/dev/null)
     if [ "$CODE" = "200" ]; then
-      sed -i 's|"model": "luciaa/oc/big-pickle"|"model": "luciaa/my9model-smart"|' "$TARGET/opencode.json"
+      sed -i 's|"model": "luciaa/oc/big-pickle"|"model": "luciaa/my9model-smart"|' "$TARGET/opencode.json" 2>/dev/null
       ok "auto-rotate ON — default = my9model-smart (verified)"
     else
       warn "combo model not ready (HTTP ${CODE:-timeout}) — default stays big-pickle, combos pickable with 'm'"
@@ -349,25 +699,7 @@ else
   ok "auto-rotate OFF — pinned to big-pickle (switch with 'm' in TUI)"
 fi
 
-# ─── helpers ───────────────────────────────────────────────────
-log "helpers" "installing luciaa-serve, luciaa-doctor, luciaa-name, luciaa-menu"
-
-# copy helper scripts from repo
-cp "$REPO_DIR/luciaa-serve" "$TARGET/luciaa-serve"
-cp "$REPO_DIR/luciaa-doctor" "$TARGET/luciaa-doctor"
-cp "$REPO_DIR/luciaa-name" "$TARGET/luciaa-name"
-chmod +x "$TARGET/luciaa-serve" "$TARGET/luciaa-doctor" "$TARGET/luciaa-name"
-ok "helpers copied from repo"
-
-# symlink to PATH
-BIN_DIR="${PREFIX:-}/bin"; [ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR"
-ln -sf "$TARGET/luciaa-serve" "$BIN_DIR/luciaa-serve"
-ln -sf "$TARGET/luciaa-doctor" "$BIN_DIR/luciaa-doctor"
-ln -sf "$TARGET/luciaa-name" "$BIN_DIR/luciaa-name"
-[ -f "$REPO_DIR/ct002-menu.mjs" ] && ln -sf "$REPO_DIR/ct002-menu.mjs" "$BIN_DIR/luciaa-menu"
-case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not in PATH — add: export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
-
-# shell hook (warn if running inside repo with placeholder)
+# ─── shell hook ────────────────────────────────────────────────
 HOOK='# luciaa: plain `opencode` wrapper + repo-shadow guard
 opencode() {
   if [ -f "./opencode.json" ] && grep -q "YOUR_9ROUTER_KEY_HERE" ./opencode.json 2>/dev/null; then
@@ -384,26 +716,33 @@ ok "shell hook added — restart terminal or: exec \$SHELL"
 
 # ─── verify ────────────────────────────────────────────────────
 log "verify" "testing config + router"
-if [ -n "$API_KEY" ] && curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" | grep -q '"id"'; then
+if [ -n "$API_KEY" ] && curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" 2>/dev/null | grep -q '"id"'; then
   ok "router serving models:"
-  curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -7 | sed 's/^/    /'
+  curl -s -m 5 -H "Authorization: Bearer $API_KEY" "$ROUTER_URL/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -7 | sed 's/^/    /'
   "$TARGET/luciaa-doctor" --fix 2>/dev/null | grep -E 'ALIVE|DEAD|fixed|default|auto-rotate' | sed 's/^/    /'
 else
   warn "router not responding yet — wait 10s then run: luciaa-doctor --fix"
 fi
 
-node -e "JSON.parse(require('fs').readFileSync('$TARGET/opencode.json','utf8'))" 2>/dev/null && ok "config valid — opencode will boot" || { err "config broken — restoring"; cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json" 2>/dev/null; [ -n "$API_KEY" ] && sed -i "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json"; }
+if have node; then
+  node -e "JSON.parse(require('fs').readFileSync('$TARGET/opencode.json','utf8'))" 2>/dev/null \
+    && ok "config valid — opencode will boot" \
+    || { warn "config broken — restoring template"; copy_from_src "opencode.json" "$TARGET/opencode.json" || true; [ -n "$API_KEY" ] && sed -i "s|YOUR_9ROUTER_KEY_HERE|$API_KEY|" "$TARGET/opencode.json" 2>/dev/null; }
+fi
+if [ "$HELPERS_OK" != true ]; then
+  warn "luciaa-serve not installed — 9router will not be auto-guarded"
+fi
 
 # ─── done ──────────────────────────────────────────────────────
 hr
 printf '%s  ██████████████████████████████████%s\n' "$G" "$X"
 printf '%s   luciaa INSTALLED%s\n' "$B" "$X"
 printf '%s   run:  opencode%s\n' "$G" "$X"
-[ "$IS_TERMUX" = true ] && {
+if [ "$IS_TERMUX" = true ]; then
   printf '%s   PHONE:  luciaa-serve   (9router + watchdog, survives sleep/app-switch)%s\n' "$G" "$X"
   printf '%s   then:  opencode        (new Termux session)%s\n' "$G" "$X"
   printf '%s   check:  luciaa-serve status%s\n' "$D" "$X"
-}
+fi
 printf '%s   models: press m in TUI to rotate%s\n' "$D" "$X"
 printf '%s   doctor: luciaa-doctor [--fix]%s\n' "$D" "$X"
 printf '%s   rename: luciaa-name <name>%s\n' "$D" "$X"

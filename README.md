@@ -103,9 +103,34 @@ cd luciaa
 bash install.sh
 
 # Background services (persist across app switches)
-luciaa-serve start    # 9router + watchdog
+luciaa-serve start    # 9router + watchdog (foreground)
+# or detach it so it survives closing the session:
+luciaa-serve start --daemon
 opencode              # New session
 ```
+
+### Installer Flags & Duplicate Cleanup
+
+Before installing anything, the installer removes **duplicate** installs so there is exactly one live `opencode` and one `9router` on the machine — the usual cause of “two different models”, stale configs, and 9router dying.
+
+```bash
+bash install.sh --dedup-only      # clean duplicates, install nothing
+bash install.sh --no-dedup        # skip the cleanup pass
+bash install.sh --yes --mode 1    # non-interactive on-device install
+bash install.sh --name neo --mode 2
+```
+
+| Flag | Effect |
+|------|--------|
+| `-y`, `--yes` | non-interactive, accept defaults |
+| `--name <n>` | display name, skips the prompt |
+| `--mode <1\|2\|3>` | 1=on-device · 2=connect · 3=skip router |
+| `--no-dedup` | skip duplicate cleanup |
+| `--dedup-only` | cleanup and exit |
+
+**Nothing is hard-deleted.** Retired files move to `~/.luciaa-dedup-backup-<timestamp>/` mirroring their original path, so `mv ~/.luciaa-dedup-backup-*/* ~/` undoes it. Paths in directories you cannot write are reported and skipped, never forced.
+
+Env equivalents for automation: `LUCIA_ASSUME_YES=1`, `LUCIA_NAME`, `LUCIA_MODE`, `LUCIA_NO_DEDUP=1`, `LUCIA_ROUTER_URL`, `LUCIA_API_KEY`.
 
 **Termux Hardening:**
 ```bash
@@ -247,7 +272,8 @@ luciaa/
 | `opencode: command not found` | PATH not updated | `source ~/.bashrc` or restart shell |
 | `Configuration invalid: bad file reference` | Running inside repo dir | `cd ~ && opencode` |
 | `No active credentials for provider` | Model quota exhausted | `luciaa-doctor --fix` |
-| `9router: connection refused` | Process killed by OOM | `luciaa-serve start` (watchdog) |
+| `9router: connection refused` | Process killed by OOM / Android froze Termux | `luciaa-serve start` (watchdog) |
+| Two `opencode` binaries / models differ between sessions | Duplicate installs | `bash install.sh --dedup-only` |
 | `git pull` conflicts | Local config modified | `git stash && git pull && git stash pop` |
 
 **Diagnostic Commands:**

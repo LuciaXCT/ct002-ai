@@ -1,85 +1,208 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # luciaa-serve — watchdog that keeps 9router alive on Android/Termux
-PORT=20128
-URL="http://127.0.0.1:$PORT/v1/models"
-LOG="$HOME/.9router/serve.log"
-PIDFILE="$HOME/.9router/serve.pid"
+# why: Android freezes/kills Termux processes seconds after you leave the app
+#      (and the dashboard's memory spike can trip the OOM killer).
+#      This revives the router automatically, forever.
+#
+#   luciaa-serve start            → guard the router in the foreground
+#   luciaa-serve start --daemon   → guard it detached (survives app switch)
+#   luciaa-serve status           → is the router up? is the guard awake?
+#   luciaa-serve logs             → tail the router log
+#   luciaa-serve stop             → stop guard + router
+#   luciaa-serve restart          → bounce both
+#
+# PORTABLE: the installer rewrites the shebang to $PREFIX/bin/bash on Termux.
+#           Works unchanged on Linux / macOS / WSL / VPS.
 
+set -uo pipefail
+
+PORT="${LUCIA_ROUTER_PORT:-20128}"
+URL="http://127.0.0.1:$PORT/v1/models"
+LOG="${LUCIA_ROUTER_LOG:-$HOME/.9router/serve.log}"
+PIDFILE="${LUCIA_ROUTER_PIDFILE:-$HOME/.9router/serve.pid}"
+CHECK_INTERVAL="${LUCIA_WATCHDOG_INTERVAL:-10}"
+MAX_LOG_BYTES="${LUCIA_LOG_MAX_BYTES:-2097152}"
+# pattern used to clear a wedged router before reviving it; override if your
+# process name differs and you don't want unrelated matches killed.
+ROUTER_MATCH="${LUCIA_ROUTER_MATCH:-9router}"
+PREFIX="${PREFIX:-}"
+
+# ─── cross-OS 9router launcher ─────────────────────────────────
+# Termux has no /usr/bin/env, so a bare `9router` dies with
+# "bad interpreter". Linux/VPS/macOS are fine. Resolve once, reuse.
 R9_BIN=""
 resolve_r9() {
   [ -n "$R9_BIN" ] && return 0
-  if command -v 9router >/dev/null 2>&1 && 9router --version >/dev/null 2>&1; then R9_BIN="9router"; return 0; fi
-  for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js" "/usr/lib/node_modules/9router/cli.js" "/usr/local/lib/node_modules/9router/cli.js"; do
-    [ -f "$c" ] && R9_BIN="node $c" && return 0
+  if command -v 9router >/dev/null 2>&1 && 9router --version >/dev/null 2>&1; then
+    R9_BIN="9router"; return 0
+  fi
+  local c
+  for c in "$PREFIX/lib/node_modules/9router/cli.js" \
+           "$HOME/.npm-global/lib/node_modules/9router/cli.js" \
+           "$HOME/.local/lib/node_modules/9router/cli.js" \
+           "$HOME/.npm/lib/node_modules/9router/cli.js" \
+           "/usr/local/lib/node_modules/9router/cli.js" \
+           "/usr/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] && { R9_BIN="node $c"; return 0; }
   done
   if command -v npx >/dev/null 2>&1; then R9_BIN="npx -y 9router"; return 0; fi
   R9_BIN="9router"
 }
-alive() { curl -s -m 5 -o /dev/null "$URL"; }
-start_router() { resolve_r9; nohup $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 & }
-notify() { command -v termux-notification >/dev/null 2>&1 && termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1; }
+
+# liveness: any HTTP response (200/401/…) means the server is listening;
+# only a connection failure returns non-zero.
+alive() { curl -s -m 5 -o /dev/null "$URL" 2>/dev/null; }
+
+wait_ready() {
+  local tries="${1:-20}" i=0
+  while [ "$i" -lt "$tries" ]; do
+    alive && return 0
+    i=$((i+1)); sleep 1
+  done
+  return 1
+}
+
+heal_shebang() {
+  [ -d "/data/data/com.termux" ] || [ "${LUCIA_FORCE_TERMUX:-}" = "1" ] || return 0
+  [ -n "$PREFIX" ] || return 0
+  local c
+  for c in "$PREFIX/lib/node_modules/9router/cli.js" "$HOME/.local/lib/node_modules/9router/cli.js"; do
+    [ -f "$c" ] || continue
+    head -1 "$c" 2>/dev/null | grep -q '^#!/usr/bin/env' || continue
+    sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null
+  done
+}
+
+start_router() {
+  resolve_r9
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null
+  # shellcheck disable=SC2086
+  if command -v setsid >/dev/null 2>&1; then
+    setsid $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 < /dev/null &
+  else
+    nohup $R9_BIN --no-browser --skip-update >>"$LOG" 2>&1 < /dev/null &
+  fi
+  disown 2>/dev/null || true
+}
+
+notify() {
+  command -v termux-notification >/dev/null 2>&1 && \
+    termux-notification --title "luciaa" --content "$1" >/dev/null 2>&1
+}
+
+rotate_log() {
+  [ -f "$LOG" ] || return 0
+  local size
+  size=$(wc -c <"$LOG" 2>/dev/null | tr -d ' ')
+  [ -n "$size" ] && [ "$size" -gt "$MAX_LOG_BYTES" ] 2>/dev/null && {
+    tail -c 262144 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG" 2>/dev/null
+  }
+}
+
+guard_pid() {
+  [ -f "$PIDFILE" ] || return 1
+  local pid; pid=$(cat "$PIDFILE" 2>/dev/null || true)
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# the actual monitor loop (foreground; `--daemon` re-execs into this)
+monitor() {
+  heal_shebang
+  resolve_r9
+
+  if ! alive; then
+    start_router
+    wait_ready 20 && echo "router started on :$PORT" || echo "router booting slowly — watchdog will keep reviving it"
+  else
+    echo "router already up on :$PORT — watchdog will guard it"
+  fi
+
+  if command -v termux-wake-lock >/dev/null 2>&1; then
+    termux-wake-lock 2>/dev/null && echo "wake lock held (CPU won't sleep)"
+  fi
+
+  echo "$$" > "$PIDFILE"
+  trap 'rm -f "$PIDFILE"; exit 0' INT TERM HUP
+  notify "9router watchdog active"
+  echo "watchdog awake (pid $$) — checks every ${CHECK_INTERVAL}s, revives if dead. log: $LOG"
+
+  local restarts=0 backoff=1
+  while true; do
+    sleep "$CHECK_INTERVAL"
+    rotate_log
+    if ! alive; then
+      restarts=$((restarts+1))
+      echo "$(date '+%H:%M:%S') router down — reviving (#$restarts)" >>"$LOG"
+      pkill -f "$ROUTER_MATCH" 2>/dev/null
+      sleep 1
+      start_router
+      if wait_ready 15; then
+        echo "$(date '+%H:%M:%S') revived (#$restarts)" >>"$LOG"
+        notify "9router revived (#$restarts)"
+        restarts=0; backoff=1
+      else
+        backoff=$((backoff*2)); [ "$backoff" -gt 60 ] && backoff=60
+        echo "$(date '+%H:%M:%S') revive failed — backing off ${backoff}s" >>"$LOG"
+        sleep "$backoff"
+      fi
+    fi
+  done
+}
+
+cmd_start() {
+  local daemon=false
+  [ "${1:-}" = "--daemon" ] || [ "${1:-}" = "-d" ] && daemon=true
+
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null
+  if guard_pid; then
+    echo "watchdog already running (pid $(cat "$PIDFILE"))"
+    return 0
+  fi
+  [ -f "$PIDFILE" ] && rm -f "$PIDFILE" 2>/dev/null
+
+  if [ "$daemon" = true ]; then
+    echo "starting watchdog (detached)…"
+    if command -v setsid >/dev/null 2>&1; then
+      setsid bash "$0" __monitor >>"$LOG" 2>&1 < /dev/null &
+    else
+      nohup bash "$0" __monitor >>"$LOG" 2>&1 < /dev/null &
+    fi
+    disown 2>/dev/null || true
+    sleep 2
+    cmd_status
+    return 0
+  fi
+  monitor
+}
+
+cmd_status() {
+  if alive; then echo "router  : UP on :$PORT"; else echo "router  : DOWN"; fi
+  if guard_pid; then
+    echo "watchdog: running (pid $(cat "$PIDFILE"))"
+  else
+    echo "watchdog: not running — start it with: luciaa-serve start"
+  fi
+  [ -f "$LOG" ] && { echo "recent events:"; tail -5 "$LOG" 2>/dev/null | sed 's/^/    /'; }
+}
+
+cmd_stop() {
+  if [ -f "$PIDFILE" ]; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null && echo "watchdog stopped"
+    rm -f "$PIDFILE" 2>/dev/null
+  else
+    echo "watchdog was not running"
+  fi
+  pkill -f "$ROUTER_MATCH" 2>/dev/null
+  command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null
+  echo "router stopped"
+}
 
 case "${1:-start}" in
-  start)
-    mkdir -p "$(dirname "$LOG")"
-    if [ -d "/data/data/com.termux" ]; then
-      for c in "$PREFIX/lib/node_modules/9router/cli.js"; do
-        [ -f "$c" ] && head -1 "$c" | grep -q "^#!/usr/bin/env" && sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" "$c" 2>/dev/null
-      done
-    fi
-    resolve_r9
-    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-      echo "watchdog already running (pid $(cat "$PIDFILE"))"
-      exit 0
-    fi
-    if alive; then
-      echo "router already up on :$PORT — watchdog will guard it"
-    else
-      start_router
-      sleep 5
-      alive && echo "router started on :$PORT" || echo "router booting slowly — watchdog will keep reviving it"
-    fi
-    if command -v termux-wake-lock >/dev/null 2>&1; then
-      termux-wake-lock && echo "wake lock held (CPU won't sleep)"
-    fi
-    echo "$$" > "$PIDFILE"
-    trap 'rm -f "$PIDFILE"; exit 0' INT TERM
-    notify "9router watchdog active"
-    RESTARTS=0
-    echo "watchdog awake (pid $$) — every 10s it checks, revives if dead. log: $LOG"
-    while true; do
-      sleep 10
-      if ! alive; then
-        RESTARTS=$((RESTARTS+1))
-        echo "$(date '+%H:%M:%S') router down — reviving (#$RESTARTS)" >> "$LOG"
-        pkill -f "9router" 2>/dev/null
-        sleep 1
-        start_router
-        sleep 8
-        alive && notify "9router revived (#$RESTARTS)"
-      fi
-    done
-    ;;
-  status)
-    if alive; then echo "router  : UP on :$PORT"; else echo "router  : DOWN"; fi
-    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-      echo "watchdog: running (pid $(cat "$PIDFILE"))"
-    else
-      echo "watchdog: not running — start it with: luciaa-serve"
-    fi
-    [ -f "$LOG" ] && echo "recent events:" && tail -5 "$LOG" | sed 's/^/    /'
-    ;;
-  stop)
-    if [ -f "$PIDFILE" ]; then
-      kill "$(cat "$PIDFILE")" 2>/dev/null && rm -f "$PIDFILE" && echo "watchdog stopped"
-    else
-      echo "watchdog was not running"
-    fi
-    pkill -f "9router" 2>/dev/null
-    command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock
-    echo "router stopped"
-    ;;
-  *)
-    echo "usage: luciaa-serve [start|status|stop]"
-    ;;
+  start)     shift || true; cmd_start "${1:-}" ;;
+  __monitor) monitor ;;
+  status)    cmd_status ;;
+  logs)      [ -f "$LOG" ] && tail -n "${2:-40}" "$LOG" || echo "no log yet at $LOG" ;;
+  stop)      cmd_stop ;;
+  restart)   cmd_stop; sleep 1; cmd_start "--daemon" ;;
+  *)         echo "usage: luciaa-serve [start [--daemon]|status|logs|stop|restart]" ;;
 esac

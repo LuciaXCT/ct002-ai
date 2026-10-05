@@ -350,6 +350,28 @@ bash install.sh
 
 ---
 
+### 5.4 Duplicate `opencode` / `9router` installs
+
+**Symptom**: Two different `opencode` binaries answer depending on the shell; models differ between sessions; `9router` starts from a stale tree; “which config is live?” is unanswerable.
+
+**Root Cause**: More than one install on `$PATH` (or several npm prefixes) — e.g. the opencode.ai installer's `~/.opencode/bin/opencode` **plus** an npm-global copy, or two `.../node_modules/9router` trees. The first one on `$PATH` wins, silently.
+
+**Resolution**: the installer now performs this cleanup automatically **before** it installs anything.
+```bash
+# Preview/clean duplicates only, then exit
+bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/luciaa/main/install.sh) --dedup-only
+
+# Or skip it on a fresh run
+bash install.sh --no-dedup
+
+# Inspect what was retired (nothing is hard-deleted — every move is reversible)
+ls -R ~/.luciaa-dedup-backup-*
+```
+
+**What it retires**: extra `opencode` binaries and shims (keeping the first on `$PATH`), duplicate `9router` trees, legacy `opencode.jsonc` / `config.json` shadows, and broken `luciaa-*` / `ct002-*` helper symlinks. Paths under a directory you cannot write (e.g. root-owned `/usr/local/bin`) are reported and skipped, never forced.
+
+---
+
 ## 6. Git & Version Control Conflicts
 
 ### 6.1 `error: Your local changes would be overwritten by merge`
@@ -535,7 +557,7 @@ luciaa-name "NewName"
   npm --version 2>/dev/null || echo "npm: not found"
   
   echo -e "\n=== CONFIG ==="
-  cat ~/.config/opencode/opencode.json | jq '.provider.anondark.options | {baseURL, apiKey: (.apiKey | length)}'
+  cat ~/.config/opencode/opencode.json | jq '.provider.luciaa.options | {baseURL, apiKey: (.apiKey | length)}'
   
   echo -e "\n=== DOCTOR ==="
   luciaa-doctor 2>&1
