@@ -272,7 +272,6 @@ esac
 
 # ─── auto-rotate ───────────────────────────────────────────────
 ROTATE=true
-ok "auto-rotate: ON (default)"
 
 # ─── apply config ──────────────────────────────────────────────
 mkdir -p "$TARGET/agent" "$TARGET/agents"
