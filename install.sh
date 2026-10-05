@@ -271,12 +271,20 @@ dedup_opencode() {
 
   [ "${#cands[@]}" -eq 0 ] && { ok "no opencode installs found — installer will add one"; return 0; }
 
-  local keep_path="" keep_real=""
+  # Prefer a copy that ACTUALLY RUNS. On Termux the upstream glibc build is
+  # first on PATH and fails with "cannot execute: required file not found",
+  # so keeping "first on PATH" would preserve a dead binary.
+  local keep_path="" keep_real="" fallback_path="" fallback_real="" rp
   for p in "${cands[@]}"; do
     { [ -e "$p" ] || [ -L "$p" ]; } || continue
-    [ -z "$keep_real" ] || continue
-    keep_path="$p"; keep_real="$(realpath_of "$p")"
+    rp="$(realpath_of "$p")"
+    [ -n "$fallback_real" ] || { fallback_path="$p"; fallback_real="$rp"; }
+    if "$p" --version >/dev/null 2>&1; then keep_path="$p"; keep_real="$rp"; break; fi
   done
+  if [ -z "$keep_real" ]; then
+    keep_path="$fallback_path"; keep_real="$fallback_real"
+    [ -n "$keep_real" ] && warn "no working opencode found — keeping $keep_path anyway"
+  fi
   [ -z "$keep_real" ] && return 0
   ok "keeping opencode: $keep_path"
 
@@ -500,6 +508,17 @@ install_opencode_termux() {
     return 1
   fi
   if ! dpkg -i "$out"; then warn "dpkg install failed"; return 1; fi
+
+  # The upstream glibc build is usually already on PATH (it installs fine and
+  # only fails at exec time). It sits FIRST on PATH, so it would shadow the
+  # Android build we just installed. Retire it — but only if it truly fails.
+  local f
+  for f in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+    { [ -e "$f" ] || [ -L "$f" ]; } || continue
+    "$f" --version >/dev/null 2>&1 && continue
+    rm -f "$f" 2>/dev/null && warn "retired non-working opencode (glibc build): $f"
+  done
+
   pkg install -y ripgrep >/dev/null 2>&1 || true
   return 0
 }

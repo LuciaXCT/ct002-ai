@@ -233,7 +233,7 @@ Attach `/tmp/luciaa-diag.txt` to a GitHub issue.
 |---|---|---|
 | `CANNOT LINK EXECUTABLE curl` / SSL symbol error | libcurl/libssl out of sync; `pkg` can't self-repair (curl-based mirror check) | `apt update && apt full-upgrade`; if that fails, `node`-download + `dpkg -i` per [TERMUX.md §2](TERMUX.md) |
 | `9router: bad interpreter: /usr/bin/env` | Termux has no `/usr/bin/env` | installer/watchdog heal the shebang automatically; `luciaa-serve repair` to force |
-| opencode installs but won't run | upstream build is glibc; Android is bionic | `bash install.sh --opencode termux` |
+| `opencode: cannot execute: required file not found` | upstream build is glibc; Android is bionic | `bash install.sh --opencode termux` — it also retires the dead copy so it cannot shadow the new build on PATH |
 | `opencode: command not found` after install | PATH not updated | restart the shell, or `bash install.sh` again (it adds PATH); `--no-path` prints the line |
 | 9router stops when you leave the app | Android froze Termux | battery exclusion + `luciaa-serve start --daemon` + `termux-wake-lock` |
 | `luciaa-serve: command not found` | installer never finished | finish §2, then re-run the installer |
