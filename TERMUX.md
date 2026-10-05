@@ -112,7 +112,47 @@ instead of failing later in a confusing place.
 
 ---
 
-## 3. Stop Android from killing services
+## 3. opencode on Termux — use the Android build
+
+The upstream `opencode.ai/install` script targets **glibc**. Android uses
+**bionic** libc, so the `linux-arm64` binary it downloads can install but fail
+to execute. It is also a ~100 MB download, and its progress bar is exactly why
+the installer no longer runs a spinner of its own — two progress bars writing
+to one line is the garbled `[⠏] ■■■ 51%` mess.
+
+If `opencode --version` works after install, you are fine. If not, install the
+Android-native build:
+
+```bash
+bash install.sh --opencode termux
+```
+
+That resolves the latest `guysoft/opencode-termux` release (a third-party
+cross-compiled Bun + WebKit build for Android aarch64), downloads the `.deb`
+with a resumable `curl -C -`, and installs it with `dpkg`. It is a drop-in
+`opencode` command.
+
+| You want | Flag |
+|---|---|
+| try upstream, then verify (default) | `--opencode auto` |
+| upstream only | `--opencode official` |
+| Android-native build | `--opencode termux` |
+| no opencode here, just 9router + config | `--opencode skip` |
+
+Running 9router on the phone and `opencode` on a computer over LAN is also
+fully supported — pick **mode 2** at the prompt.
+
+### PATH
+
+The installer adds `~/.opencode/bin` and `~/.local/bin` to `~/.bashrc`
+(creating it if missing — a fresh Termux profile has none, which is why
+upstream prints "No config file found for bash") and to `~/.zshrc` when
+present. Opt out with `--no-path`; the installer then prints the exact line
+for you to add yourself.
+
+---
+
+## 4. Stop Android from killing services
 
 Android freezes or kills Termux seconds after you leave the app, which is why
 9router appears to "die" on its own.
@@ -132,7 +172,7 @@ Android freezes or kills Termux seconds after you leave the app, which is why
 
 ---
 
-## 4. Run 9router in the background (the guard)
+## 5. Run 9router in the background (the guard)
 
 ```bash
 luciaa-serve start --daemon   # detached; survives closing the session
@@ -170,7 +210,7 @@ sv status luciaa
 
 ---
 
-## 5. Diagnostics
+## 6. Diagnostics
 
 ```bash
 {
@@ -187,12 +227,14 @@ Attach `/tmp/luciaa-diag.txt` to a GitHub issue.
 
 ---
 
-## 6. Termux troubleshooting table
+## 7. Termux troubleshooting table
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `CANNOT LINK EXECUTABLE curl` / SSL symbol error | libcurl/libssl out of sync; `pkg` can't self-repair (curl-based mirror check) | `apt update && apt full-upgrade`; if that fails, `node`-download + `dpkg -i` per [TERMUX.md §2](TERMUX.md) |
 | `9router: bad interpreter: /usr/bin/env` | Termux has no `/usr/bin/env` | installer/watchdog heal the shebang automatically; `luciaa-serve repair` to force |
+| opencode installs but won't run | upstream build is glibc; Android is bionic | `bash install.sh --opencode termux` |
+| `opencode: command not found` after install | PATH not updated | restart the shell, or `bash install.sh` again (it adds PATH); `--no-path` prints the line |
 | 9router stops when you leave the app | Android froze Termux | battery exclusion + `luciaa-serve start --daemon` + `termux-wake-lock` |
 | `luciaa-serve: command not found` | installer never finished | finish §2, then re-run the installer |
 | Router up but all models 401 | first-run password not set | open `http://localhost:20128`, set password, then `luciaa-doctor --fix` |
@@ -202,7 +244,7 @@ Attach `/tmp/luciaa-diag.txt` to a GitHub issue.
 
 ---
 
-## 7. Battery / data notes
+## 8. Battery / data notes
 
 - 9router holds the model connection, so the wake lock costs battery. Stop it
   when idle: `luciaa-serve stop`.

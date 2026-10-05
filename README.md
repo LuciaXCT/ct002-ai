@@ -127,10 +127,17 @@ bash install.sh --name neo --mode 2
 | `--mode <1\|2\|3>` | 1=on-device · 2=connect · 3=skip router |
 | `--no-dedup` | skip duplicate cleanup |
 | `--dedup-only` | cleanup and exit |
+| `--no-path` | don't touch shell rc files (PATH) |
+| `--opencode <m>` | `auto` · `official` · `termux` · `skip` |
+| `--skip-opencode` | alias for `--opencode skip` |
 
 **Nothing is hard-deleted.** Retired files move to `~/.luciaa-dedup-backup-<timestamp>/` mirroring their original path, so `mv ~/.luciaa-dedup-backup-*/* ~/` undoes it. Paths in directories you cannot write are reported and skipped, never forced.
 
-Env equivalents for automation: `LUCIA_ASSUME_YES=1`, `LUCIA_NAME`, `LUCIA_MODE`, `LUCIA_NO_DEDUP=1`, `LUCIA_ROUTER_URL`, `LUCIA_API_KEY`.
+The installer adds `~/.opencode/bin` and `~/.local/bin` to your shell rc
+(creating `~/.bashrc` if missing) so `opencode` and `luciaa-*` are on `PATH`.
+Disable with `--no-path`.
+
+Env equivalents for automation: `LUCIA_ASSUME_YES=1`, `LUCIA_NAME`, `LUCIA_MODE`, `LUCIA_NO_DEDUP=1`, `LUCIA_PATH=0`, `LUCIA_OPENCODE=auto|official|termux|skip`, `LUCIA_ROUTER_URL`, `LUCIA_API_KEY`.
 
 **Termux Hardening:**
 ```bash

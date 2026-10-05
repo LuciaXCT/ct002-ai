@@ -11,9 +11,13 @@
 #       --mode <1|2|3>  1=on-device  2=connect  3=skip router setup
 #       --no-dedup      skip the duplicate-cleanup pass
 #       --dedup-only    clean duplicates and exit
+#       --no-path       do not touch shell rc files (PATH)
+#       --opencode <m>  auto | official | termux | skip
+#       --skip-opencode same as --opencode skip
 #   -h, --help          this help
 #
-# Env overrides: LUCIA_NAME, LUCIA_MODE, LUCIA_ASSUME_YES=1, LUCIA_NO_DEDUP=1
+# Env overrides: LUCIA_NAME, LUCIA_MODE, LUCIA_ASSUME_YES=1, LUCIA_NO_DEDUP=1,
+#                LUCIA_PATH=0, LUCIA_OPENCODE=auto|official|termux|skip
 #
 # NOTE ON `set -e`: we deliberately run with `set -uo pipefail` and NOT `-e`.
 # Fetching a helper, probing a dead model, or a failed optional `cp` must never
@@ -38,12 +42,16 @@ TARGET="$HOME/.config/opencode"
 ASSUME_YES=false
 DO_DEDUP=true
 DEDUP_ONLY=false
+ADD_PATH=true
 ARG_NAME=""
 ARG_MODE=""
+OPENCODE_MODE="auto"
 [ "${LUCIA_ASSUME_YES:-}" = "1" ] && ASSUME_YES=true
 [ "${LUCIA_NO_DEDUP:-}" = "1" ] && DO_DEDUP=false
+[ "${LUCIA_PATH:-}" = "0" ] && ADD_PATH=false
 [ -n "${LUCIA_NAME:-}" ] && ARG_NAME="$LUCIA_NAME"
 [ -n "${LUCIA_MODE:-}" ] && ARG_MODE="$LUCIA_MODE"
+[ -n "${LUCIA_OPENCODE:-}" ] && OPENCODE_MODE="$LUCIA_OPENCODE"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,8 +62,13 @@ while [ $# -gt 0 ]; do
     --mode=*) ARG_MODE="${1#*=}" ;;
     --no-dedup) DO_DEDUP=false ;;
     --dedup-only) DEDUP_ONLY=true ;;
+    --no-path) ADD_PATH=false ;;
+    --add-path) ADD_PATH=true ;;
+    --skip-opencode) OPENCODE_MODE=skip ;;
+    --opencode) shift; OPENCODE_MODE="${1:-auto}" ;;
+    --opencode=*) OPENCODE_MODE="${1#*=}" ;;
     -h|--help)
-      sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) ;;
   esac
@@ -452,20 +465,84 @@ else
 fi
 
 # ─── opencode ──────────────────────────────────────────────────
-log "opencode" "checking installation"
-if have opencode; then
-  VER=$(opencode --version 2>/dev/null | head -1)
-  ok "found: $VER"
-  [ "$IS_WSL" = true ] && echo "$VER" | grep -q "arena" && warn "arena binary — recommend mode 2 or 3"
-else
-  if ask "opencode not found — install now?" Y; then
-    (curl -fsSL https://opencode.ai/install | bash) & spin "installing opencode" $!; wait $! 2>/dev/null
-    export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
-    have opencode && ok "opencode installed" || die "opencode install failed — see https://opencode.ai/docs"
-  else
-    die "opencode required"
+opencode_runs() { have opencode && opencode --version >/dev/null 2>&1; }
+
+install_opencode_official() {
+  # The upstream installer draws its OWN progress bar. Do not wrap it in our
+  # spinner — two progress displays on one line is exactly the garbled
+  # `[⠏] ■■■ 51%` mess. Let upstream own the terminal for the download.
+  log "download" "opencode — ~100 MB (the bar below is upstream's)"
+  curl -fsSL https://opencode.ai/install | bash
+}
+
+# Android/Termux native build. The upstream linux-arm64 binary is glibc and
+# may not execute on Android's bionic libc; this is cross-compiled for Android.
+# aarch64 only. Opt in with: --opencode termux
+install_opencode_termux() {
+  local arch; arch="$(uname -m)"
+  if [ "$arch" != "aarch64" ]; then
+    warn "no Termux-native opencode build for '$arch' (aarch64 only)"
+    return 1
   fi
-fi
+  have curl || return 1
+  log "resolve" "Termux-native opencode build"
+  local api json tag url
+  api="https://api.github.com/repos/guysoft/opencode-termux/releases/latest"
+  json="$(curl -fsSL "$api" 2>/dev/null)" || { warn "could not reach the release API"; return 1; }
+  tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+  url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*aarch64\.deb"' | head -1 | sed 's/.*": *"//;s/"$//')"
+  [ -z "$url" ] && { warn "no aarch64 .deb in release ${tag:-unknown}"; return 1; }
+  local out="$HOME/.cache/luciaa/$(basename "$url")"
+  mkdir -p "$(dirname "$out")"
+  log "download" "opencode $tag — big download; resumable, so re-run if it drops"
+  if ! curl -fL --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$out" "$url"; then
+    warn "download failed — re-run to resume (uses curl -C -)"
+    return 1
+  fi
+  if ! dpkg -i "$out"; then warn "dpkg install failed"; return 1; fi
+  pkg install -y ripgrep >/dev/null 2>&1 || true
+  return 0
+}
+
+ensure_opencode() {
+  if opencode_runs; then
+    ok "found: $(opencode --version 2>/dev/null | head -1)"
+    [ "$IS_WSL" = true ] && opencode --version 2>/dev/null | grep -q "arena" && warn "arena binary — recommend mode 2 or 3"
+    return 0
+  fi
+  if [ "$OPENCODE_MODE" = "skip" ]; then
+    warn "opencode install skipped — 9router + config still set up"
+    return 0
+  fi
+  case "$OPENCODE_MODE" in
+    termux)   install_opencode_termux   || warn "native install failed — see TERMUX.md" ;;
+    official) install_opencode_official || warn "official installer failed" ;;
+    auto)
+      if [ "$IS_TERMUX" = true ]; then
+        # Try what upstream supports, then VERIFY. If the glibc build will not
+        # execute we say so instead of silently shipping a dead `opencode`.
+        install_opencode_official || warn "official installer failed"
+      elif ask "opencode not found — install now?" Y; then
+        install_opencode_official || die "opencode install failed — see https://opencode.ai/docs"
+      else
+        die "opencode required (use --opencode skip to continue without it)"
+      fi ;;
+    *) warn "unknown --opencode '$OPENCODE_MODE' — using official"; install_opencode_official ;;
+  esac
+  export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${BIN_DIR:-}:$PATH"
+  if opencode_runs; then
+    ok "opencode: $(opencode --version 2>/dev/null | head -1)"
+  elif [ "$IS_TERMUX" = true ]; then
+    warn "opencode is installed but does not run here"
+    warn "upstream linux-arm64 is glibc; Android uses bionic"
+    warn "fix:  bash install.sh --opencode termux   (Android-native build)"
+  else
+    warn "opencode installed but not runnable yet"
+  fi
+}
+
+log "opencode" "checking installation"
+ensure_opencode
 
 # ─── helpers (installed BEFORE the watchdog needs them) ───────
 # Ordering matters: the old installer started `luciaa-serve` on Termux before
@@ -493,8 +570,40 @@ for h in luciaa-serve luciaa-doctor luciaa-name; do
   ln -sf "$TARGET/$h" "$BIN_DIR/$h"
 done
 [ -f "$TARGET/luciaa-menu" ] && ln -sf "$TARGET/luciaa-menu" "$BIN_DIR/luciaa-menu"
-case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR not in PATH — add: export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
 ok "helpers linked in $BIN_DIR"
+
+# ─── PATH (automatic; opt out with --no-path) ──────────────────
+ensure_path() {
+  local line="export PATH=\"\$HOME/.opencode/bin:\$HOME/.local/bin"
+  [ -n "${BIN_DIR:-}" ] && line="$line:$BIN_DIR"
+  line="$line:\$PATH\""
+
+  if [ "$ADD_PATH" != true ]; then
+    warn "PATH not modified (--no-path). Add manually:"
+    printf '    %s\n' "$line"
+    return 0
+  fi
+
+  # a fresh Termux profile may have no .bashrc at all — that is why upstream's
+  # installer says "No config file found for bash".
+  [ -f "$HOME/.bashrc" ] || : > "$HOME/.bashrc"
+
+  local rc added=false
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [ -f "$rc" ] || continue
+    grep -q '\.opencode/bin' "$rc" 2>/dev/null && continue
+    printf '\n# luciaa: opencode + helpers on PATH\n%s\n' "$line" >> "$rc"
+    added=true
+  done
+
+  export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${BIN_DIR:-}:$PATH"
+  if [ "$added" = true ]; then
+    ok "PATH updated in shell rc (restart shell, or: exec \$SHELL)"
+  else
+    ok "PATH already configured"
+  fi
+}
+ensure_path
 
 # ─── 9router + key ─────────────────────────────────────────────
 API_KEY=""
