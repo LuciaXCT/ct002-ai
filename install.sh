@@ -303,8 +303,8 @@ cp "$REPO_DIR/opencode.json" "$TARGET/opencode.json" 2>/dev/null || {
 EOF
 }
 
-cp "$REPO_DIR/.opencode/agents/anondark.md" "$TARGET/agent/anondark.md" 2>/dev/null
-cp "$REPO_DIR/.opencode/agents/anondark.md" "$TARGET/agents/anondark.md" 2>/dev/null
+cp "$REPO_DIR/.opencode/agents/luciaa.md" "$TARGET/agent/luciaa.md" 2>/dev/null
+cp "$REPO_DIR/.opencode/agents/luciaa.md" "$TARGET/agents/luciaa.md" 2>/dev/null
 
 # retire legacy configs that shadow
 for f in "$TARGET/opencode.jsonc" "$TARGET/config.json"; do
@@ -322,7 +322,7 @@ EOF
 ok "persona.json → hello, $USERNAME"
 
 # bake name into agent
-for AF in "$TARGET/agent/anondark.md" "$TARGET/agents/anondark.md"; do
+for AF in "$TARGET/agent/luciaa.md" "$TARGET/agents/luciaa.md"; do
   [ -f "$AF" ] && sed -i "s|{{USER_NAME}}|$USERNAME|g" "$AF"
 done
 ok "name baked — 'hey luciaa' greets you as $USERNAME"
@@ -391,7 +391,7 @@ cat > "$TARGET/luciaa-name" <<'EOF'
 #!/bin/bash
 N="${1:-}"; [ -z "$N" ] && { echo "usage: luciaa-name <newname>"; exit 1; }
 D="$HOME/.config/opencode"; F=0
-for f in "$D/agent/anondark.md" "$D/agents/anondark.md"; do [ -f "$f" ]||continue; F=1; sed -i "s|ALWAYS address them as \*\*[^*]*\*\*|ALWAYS address them as **$N**|" "$f"; sed -i "s|{{USER_NAME}}|$N|g" "$f"; sed -i "s|locked in for [A-Za-z0-9_]*|locked in for $N|" "$f"; sed -i "s|wazzup {{USER_NAME}}|wazzup $N|" "$f"; done
+for f in "$D/agent/luciaa.md" "$D/agents/luciaa.md"; do [ -f "$f" ]||continue; F=1; sed -i "s|ALWAYS address them as \*\*[^*]*\*\*|ALWAYS address them as **$N**|" "$f"; sed -i "s|{{USER_NAME}}|$N|g" "$f"; sed -i "s|locked in for [A-Za-z0-9_]*|locked in for $N|" "$f"; sed -i "s|wazzup {{USER_NAME}}|wazzup $N|" "$f"; done
 [ "$F" = 0 ] && { echo "luciaa agent not found — run installer first"; exit 1; }
 [ -f "$D/persona.json" ] && sed -i "s|\"address\": \"[^\"]*\"|\"address\": \"$N\"|" "$D/persona.json"
 echo "bet — luciaa calls you $N now. restart opencode."

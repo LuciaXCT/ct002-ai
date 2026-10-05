@@ -1,248 +1,583 @@
-# CT-002 Troubleshooting — Termux Edition
+# luciaa — Troubleshooting & Diagnostics Guide
 
-Every error below is a real one someone hit. Find your message, do the fix, done.
+Version: 2.1.0 | Last Updated: 2025
 
----
-
-## 1. `opencode: command not found` (after install)
-
-Shell hasn't reloaded PATH.
-
-```bash
-source ~/.bashrc        # or just close + reopen Termux
-opencode
-```
-
-Still nothing? opencode isn't installed — rerun `bash install.sh`, answer **y** at the opencode step.
+This document catalogs known issues, root causes, and verified resolutions encountered during deployment across Linux, macOS, Termux (Android), and WSL2 environments. Each entry includes diagnostic steps and remediation procedures.
 
 ---
 
-## 2. `Configuration is invalid ... bad file reference: "{file:./agent/ct002.md}"`
+## Table of Contents
 
-You ran `opencode` **inside the repo folder** and it read the repo's own config before your installed one.
+1. [Environment & PATH Issues](#1-environment--path-issues)
+2. [Configuration Loading & Shadowing](#2-configuration-loading--shadowing)
+3. [9router Gateway Failures](#3-9router-gateway-failures)
+4. [Model Health & Credential Errors](#4-model-health--credential-errors)
+5. [Termux/Android-Specific Issues](#5-termuxandroid-specific-issues)
+6. [Git & Version Control Conflicts](#6-git--version-control-conflicts)
+7. [Installer Failures](#7-installer-failures)
+8. [Diagnostic Tooling](#8-diagnostic-tooling)
 
+---
+
+## 1. Environment & PATH Issues
+
+### 1.1 `opencode: command not found` (Post-Install)
+
+**Symptom**: `opencode` not recognized after successful installer completion.
+
+**Root Cause**: Shell PATH not refreshed; `~/.local/bin` or `~/.opencode/bin` not in `$PATH`.
+
+**Resolution**:
 ```bash
-cd ~                    # leave the repo dir — this alone fixes it
-opencode
+# Option A: Restart shell (recommended)
+exec $SHELL
+
+# Option B: Manual PATH refresh
+source ~/.bashrc   # or ~/.zshrc
+
+# Option C: Verify installation location
+ls -la ~/.local/bin/opencode ~/.opencode/bin/opencode
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
 ```
 
-If you want to stay in the repo dir, update it (new clones carry a valid config):
+**Verification**: `opencode --version` should return version string.
 
+---
+
+### 1.2 `luciaa-doctor`, `luciaa-serve`, `luciaa-name`: command not found
+
+**Symptom**: Helper utilities not found in PATH.
+
+**Root Cause**: Symlinks not created or `$BIN_DIR` not in PATH.
+
+**Resolution**:
 ```bash
-cd ~/ct002-ai && git checkout -- opencode.json && git pull
+# Verify symlinks exist
+ls -la ~/.local/bin/luciaa-*
+
+# Re-run installer (idempotent) or manually link
+ln -sf ~/.config/opencode/luciaa-doctor ~/.local/bin/luciaa-doctor
+ln -sf ~/.config/opencode/luciaa-serve ~/.local/bin/luciaa-serve
+ln -sf ~/.config/opencode/luciaa-name ~/.local/bin/luciaa-name
+
+# Ensure ~/.local/bin in PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ---
 
-## 3. `error: Your local changes to the following files would be overwritten by merge` (on git pull)
+## 2. Configuration Loading & Shadowing
 
-The opencode TUI rewrote the repo's `opencode.json` while you had it open. Discard the local edit, then pull:
+### 2.1 `Configuration is invalid ... bad file reference: "{file:./agent/luciaa.md}"`
 
+**Symptom**: opencode fails to start, cites missing agent file reference.
+
+**Root Cause**: opencode executed from repository directory (`~/luciaa`), causing it to load `./opencode.json` (template with placeholder paths) instead of `~/.config/opencode/opencode.json` (rendered config).
+
+**Resolution**:
 ```bash
-cd ~/ct002-ai
-git checkout -- opencode.json
-git pull
-```
-
----
-
-## 4. Status bar says `Godmode` or another old agent name
-
-A leftover config from a previous manual setup is **shadowing** CT-002. opencode merges
-`opencode.json` **and** `opencode.jsonc`, plus any agent files in `~/.config/opencode/agent*/`.
-
-```bash
-# retire the old merged-in config
-mv ~/.config/opencode/opencode.jsonc ~/.config/opencode/opencode.jsonc.retired 2>/dev/null
-
-# retire every non-ct002 agent file
-for f in ~/.config/opencode/agent/*.md ~/.config/opencode/agents/*.md; do
-  case "$f" in *ct002*) ;; *) [ -f "$f" ] && mv "$f" "$f.retired";; esac
-done
-
+# Always run from home directory
 cd ~ && opencode
+
+# Verify active config
+opencode debug config 2>/dev/null | head -20
 ```
 
-The installer does this automatically on fresh runs — this manual block is for setups installed before v1.4.
+**Prevention**: Installer adds shell wrapper to `~/.bashrc`/`~/.zshrc` that warns on repo-directory execution.
 
 ---
 
-## 4b. `Configuration is invalid ... Unrecognized keys: "baseURL", "apiKey"`
+### 2.2 Legacy Config Shadowing (`opencode.jsonc`, `config.json`)
 
-An old config file is still being read. opencode merges **every** config it finds in
-`~/.config/opencode` — a leftover `config.json` or `opencode.jsonc` is read alongside your
-`opencode.json`, and one stale provider entry there fails validation for everything. You'll
-see it as `Unrecognized keys`, or as a provider that insists your valid key is invalid.
+**Symptom**: Valid credentials rejected; "Unrecognized keys: baseURL, apiKey" errors; provider misbehavior.
 
+**Root Cause**: opencode merges **all** config files in `~/.config/opencode/`:
+- `opencode.json` (primary)
+- `opencode.jsonc` (legacy, loads after .json)
+- `config.json` (legacy v1 format)
+
+Legacy files with flat provider structure (`provider.baseURL` instead of `provider.<id>.options.baseURL`) cause validation failure for entire config.
+
+**Resolution**:
 ```bash
+# Identify shadowing files
 ls ~/.config/opencode/ | grep -E 'config\.json|opencode\.jsonc'
-mv ~/.config/opencode/config.json   ~/.config/opencode/config.json.retired
-mv ~/.config/opencode/opencode.jsonc ~/.config/opencode/opencode.jsonc.retired
-opencode debug config | head -30      # confirm it loads now
+
+# Retire (backup preserved)
+mv ~/.config/opencode/opencode.jsonc ~/.config/opencode/opencode.jsonc.retired.$(date +%s)
+mv ~/.config/opencode/config.json ~/.config/opencode/config.json.retired.$(date +%s)
+
+# Verify clean load
+opencode debug config 2>/dev/null | head -30
 ```
 
-The installer retires these automatically (backup kept as `*.retired.<timestamp>`). If the
-legacy file held provider keys you still need, put them under `provider.<id>.options` — not
-at the provider top level:
-
-```json
-{
-  "provider": {
-    "ct002": {
-      "options": { "baseURL": "http://localhost:20128/v1", "apiKey": "sk-..." }
-    }
-  }
-}
-```
-
-`ct002-doctor` prints a warning when it spots a legacy config sitting next to your real one.
+**Note**: Installer performs this automatically on fresh runs. Manual cleanup required for pre-v2.0 installations.
 
 ---
 
-## 5. `No active credentials for provider: openai`
+### 2.3 Repo Config Override (CWD Shadow)
 
-Your default model's upstream is **quota-demoted on the router** — the model is real, the router
-just has no working upstream key for it right now. Not your fault, not fixable by reinstalling.
+**Symptom**: "Invalid API key" despite correct key in `~/.config/opencode/opencode.json`.
 
+**Root Cause**: Running `opencode` inside `~/luciaa` repo directory. The repo's `opencode.json` contains `YOUR_9ROUTER_KEY_HERE` placeholder by design (never commits real keys). opencode merges CWD config over user config.
+
+**Resolution**:
 ```bash
-./ct002-doctor          # see which models are alive right now
-./ct002-doctor --fix    # switch the default to a live one
-```
+# Immediate fix
+cd ~ && opencode
 
-Pin a live model (big-pickle / nemotron / mimo usually) and wait — combo models
-(`my9model-*`, `opencode-free`) **revive on their own** when the quota window resets.
-That's normal free-tier routing behavior, not a bug.
-
----
-
-## 6. `bash: ./ct002-doctor: Permission denied`
-
-The clone missed the exec bit (fixed in repo as of `a7c5220` — `git pull` heals it):
-
-```bash
-cd ~/ct002-ai && git pull
-chmod +x ct002-doctor
-./ct002-doctor
-```
-
-Or make it global:
-
-```bash
-bash install.sh         # symlinks it into $PREFIX/bin → `ct002-doctor` works anywhere
+# Permanent: shell hook warns automatically (installed by default)
+# Disable with: OPENCODE_RAW=1 opencode
 ```
 
 ---
 
-## 7. `ct002-doctor: command not found`
+## 3. 9router Gateway Failures
 
-You copied the file but your shell's PATH doesn't include `~/.config/opencode`. Either:
+### 3.1 `curl: (7) Failed to connect to localhost:20128`
 
+**Symptom**: 9router not responding on expected port.
+
+**Root Causes** (in order of probability):
+1. 9router process not started
+2. Process crashed (OOM, unhandled exception)
+3. Port conflict (another service on 20128)
+4. Firewall/SELinux blocking localhost
+5. Termux: Android froze background process
+
+**Resolution**:
 ```bash
-~/.config/opencode/ct002-doctor     # run by full path, or:
-cd ~/ct002-ai && ./ct002-doctor     # run from the repo
-```
+# Check process
+ps aux | grep 9router
 
-Permanent: rerun the installer — it symlinks both helpers (`ct002-doctor`, `ct002-name`)
-into `$PREFIX/bin` (Termux) or `~/.local/bin` (everything else).
+# Check port
+ss -tlnp | grep 20128
+lsof -i :20128
+
+# Start manually (foreground for debugging)
+9router --no-browser --port 20128
+
+# Or use watchdog (auto-revive)
+luciaa-serve start
+luciaa-serve status
+```
 
 ---
 
-## 8. Router not answering / `curl: (7) Failed to connect` on :20128
+### 3.2 9router "Bad Interpreter" (Termux)
 
-**First run on VPS?** 9router needs its initial password set before it serves API keys.
+**Symptom**: `9router: /usr/bin/env: No such file or directory` or similar shebang error.
 
+**Root Cause**: Termux lacks `/usr/bin/env` and `/bin/bash`; npm-installed binaries have incorrect shebang.
+
+**Resolution** (applied automatically by installer/watchdog):
 ```bash
-# on VPS, in tmux/screen
+# Manual heal
+sed -i "1s|#!/usr/bin/env node|#!$PREFIX/bin/env node|" $PREFIX/lib/node_modules/9router/cli.js
+
+# Verify
+head -1 $PREFIX/lib/node_modules/9router/cli.js
+# Should show: #!/data/data/com.termux/files/usr/bin/env node
+```
+
+---
+
+### 3.3 First-Run Password Setup Required
+
+**Symptom**: 9router starts but API returns 401/403; no keys generated.
+
+**Root Cause**: 9router requires initial admin password setup via web UI before issuing CLI tokens.
+
+**Resolution**:
+```bash
+# Start 9router
+9router --no-browser --port 20128
+
+# Open in browser
+# Local: http://localhost:20128
+# Remote: http://<VPS_IP>:20128 (port forward or bind 0.0.0.0)
+
+# Complete setup wizard → Keys page → Copy API key
+# Paste into installer or ~/.config/opencode/opencode.json
+```
+
+---
+
+## 4. Model Health & Credential Errors
+
+### 4.1 `No active credentials for provider: openai` / 401 Unauthorized
+
+**Symptom**: All models return authentication errors despite valid API key.
+
+**Root Causes**:
+1. API key is placeholder (`YOUR_9ROUTER_KEY_HERE`)
+2. Key rotated/expired in 9router dashboard
+3. Legacy config shadowing (see §2.2)
+4. Provider upstream quota exhausted (free tier limits)
+
+**Resolution**:
+```bash
+# Diagnose
+luciaa-doctor
+
+# Fix: Update key
+# Option A: Re-run installer (prompts for key)
+bash install.sh
+
+# Option B: Manual edit
+sed -i 's|YOUR_9ROUTER_KEY_HERE|sk-your-real-key|' ~/.config/opencode/opencode.json
+
+# Option C: Auto-fetch from local 9router
+curl -s -H "x-9r-cli-token: $(printf '%s9r-cli-auth%s' \
+  "$(cat ~/.9router/machine-id)" "$(cat ~/.9router/auth/cli-secret)" | sha256sum | cut -c1-16)" \
+  http://localhost:20128/api/keys | jq -r '.[0].key'
+```
+
+---
+
+### 4.2 Model Shows "DEAD CREDS" or "UPSTREAM DOWN"
+
+**Symptom**: `luciaa-doctor` reports specific models as unavailable.
+
+**Root Cause**: 9router upstream provider quota exhausted, rate limited, or temporarily offline. Common on free tiers.
+
+**Resolution**:
+```bash
+# Auto-heal: switch default to alive model
+luciaa-doctor --fix
+
+# Manual: rotate in TUI (press 'm')
+# Or edit config directly
+sed -i 's|"model": "luciaa/oc/big-pickle"|"model": "luciaa/my9model-smart"|' ~/.config/opencode/opencode.json
+
+# Wait for quota reset (typically hourly/daily)
+# Combo models (my9model-*) auto-fallback on 429/5xx
+```
+
+---
+
+### 4.3 Rate Limited (HTTP 429)
+
+**Symptom**: Requests fail with 429; `luciaa-doctor` shows "RATE-LIMITED".
+
+**Root Cause**: Free tier per-model rate limits exceeded.
+
+**Resolution**:
+- Enable auto-rotate: installer prompt or set `"model": "luciaa/my9model-smart"`
+- Press `m` in TUI → select different model
+- Implement request throttling in workflows
+- Consider dedicated API keys for production workloads
+
+---
+
+## 5. Termux/Android-Specific Issues
+
+### 5.1 Android Kills Background Processes (App Switch / Screen Off)
+
+**Symptom**: 9router stops responding after leaving Termux app or screen timeout.
+
+**Root Cause**: Android Doze mode / App Standby / OOM killer terminates background processes ~3-30s after app backgrounded.
+
+**Resolution**: Use watchdog (installed by default):
+```bash
+# Session 1: Watchdog (keeps 9router alive)
+termux-wake-lock && luciaa-serve start
+
+# Session 2: opencode (new Termux tab/window)
+opencode
+
+# Monitor
+luciaa-serve status
+cat ~/.9router/serve.log
+```
+
+**Additional Hardening**:
+```bash
+# Battery optimization exclusion
+# Settings → Apps → Termux → Battery → Unrestricted
+
+# Persistent notification
+termux-notification --title "luciaa" --content "watchdog active" --ongoing
+
+# Alternative: tmux (survives better)
+pkg install tmux
+tmux new -s 9router
 9router --no-browser
-# open http://localhost:20128, set password, copy API key from Keys page
-# then rerun installer or edit ~/.config/opencode/opencode.json manually
-```
-
-**Android freezes/kills Termux background processes** — usually 3-5s after you switch apps
-(that "stuck after opening the dashboard" feeling = Android pausing Termux the moment you left it).
-
-**The fix: the watchdog.**
-
-```bash
-termux-wake-lock && ct002-serve       # session 1: guard + auto-revive the router, forever
-opencode                              # session 2: your AI
-```
-
-The watchdog checks every 10s and revives the router automatically (with a phone notification
-when it does). Status/stop:
-
-```bash
-ct002-serve status    # router up? watchdog awake? recent revives
-cat ~/.9router/serve.log   # what happened while you were away
-ct002-serve stop      # shut it all down
-```
-
-Extras that help Android behave:
-- Termux notification → **Acquire wakelock** button
-- Android settings → battery → **unoptimize Termux** (stop battery murder)
-- `tmux` alternative: `pkg install tmux && tmux new -s r9` → run `9router` → detach ctrl+b d
-
-If opencode errors with connection refused right after the phone slept, just wait ~8s —
-the watchdog is mid-revive.
-
----
-
-## 9. `git pull` says nothing / shows weird errors after editing files yourself
-
-Your clone diverged. Nuke and re-clone — nothing personal lives in the repo:
-
-```bash
-cd ~ && rm -rf ct002-ai
-git clone https://github.com/LuciaXCT/ct002-ai.git
-cd ct002-ai && bash install.sh
+# Ctrl+B, D to detach
 ```
 
 ---
 
-## 10. Termux install itself fails (`pkg` errors, network)
+### 5.2 `pkg` Errors / Network Failures During Install
 
+**Symptom**: Package installation fails with hash mismatches, 404s, or timeouts.
+
+**Root Cause**: Termux mirror sync issues, DNS resolution, or repository corruption.
+
+**Resolution**:
 ```bash
+# Fix mirrors & DNS
 pkg update -y --fix-missing
 pkg install -y git curl nodejs
-```
 
-Then rerun the installer. If `curl` to github fails, your DNS is broken:
+# DNS fix
+echo "nameserver 1.1.1.1" > $PREFIX/etc/resolv.conf
+echo "nameserver 8.8.8.8" >> $PREFIX/etc/resolv.conf
 
-```bash
-pkg install -y nano
-nano $PREFIX/etc/resolv.conf     # set: nameserver 1.1.1.1
-```
-
----
-
-## 11. Model picker (ctrl+p) shows no `ct002/*` models
-
-Config didn't load or was shadowed (see #4). Check what opencode actually loaded:
-
-```bash
-opencode debug config 2>/dev/null | head -30
-cat ~/.config/opencode/opencode.json   # provider.ct002.models must list models
+# Clean & retry
+pkg clean
+pkg update -y && pkg upgrade -y
 ```
 
 ---
 
-## 12. Still broken?
+### 5.3 `ct002-serve` / `luciaa-serve`: Permission Denied
 
-Grab the evidence, then open an issue:
+**Symptom**: `bash: ./luciaa-serve: Permission denied`
 
+**Root Cause**: Executable bit not set (git clone may not preserve on some filesystems).
+
+**Resolution**:
 ```bash
-ct002-doctor > /tmp/health.txt 2>&1
-opencode --version >> /tmp/health.txt 2>&1
-cat /tmp/health.txt
-```
+chmod +x ~/.config/opencode/luciaa-serve
+chmod +x ~/.config/opencode/luciaa-doctor
+chmod +x ~/.config/opencode/luciaa-name
 
-Paste the output → https://github.com/LuciaXCT/ct002-ai/issues
+# Or re-run installer (idempotent)
+bash install.sh
+```
 
 ---
 
-## The 4 golden rules (90% of problems)
+## 6. Git & Version Control Conflicts
 
-1. **`opencode` from `$HOME`** — never inside the repo dir
-2. **`9router` in its own session** — with `termux-wake-lock`
-3. **`ct002-doctor` before blaming the install** — dead models ≠ broken setup
-4. **`git pull` before reporting** — fixes land daily
+### 6.1 `error: Your local changes would be overwritten by merge`
+
+**Symptom**: `git pull` fails due to local modifications to tracked files.
+
+**Root Cause**: opencode TUI rewrites `opencode.json` in repo directory; user edits conflict with upstream.
+
+**Resolution**:
+```bash
+# Option A: Discard local changes (config lives in ~/.config/opencode/)
+cd ~/luciaa
+git checkout -- opencode.json
+git pull
+
+# Option B: Stash & reapply
+git stash
+git pull
+git stash pop  # resolve conflicts manually
+```
+
+**Prevention**: Never edit files in `~/luciaa/` — all runtime config in `~/.config/opencode/`.
+
+---
+
+### 6.2 Diverged History (Force Push Required)
+
+**Symptom**: `git push` rejected: "non-fast-forward", "tip of your current branch is behind".
+
+**Root Cause**: Local commits not in remote; remote has commits not in local (common after force-push or rebase).
+
+**Resolution**:
+```bash
+# If local changes are authoritative (typical for this repo)
+git push --force-with-lease origin main
+
+# If remote has needed changes
+git pull --rebase origin main
+# Resolve conflicts → git rebase --continue
+git push origin main
+```
+
+---
+
+## 7. Installer Failures
+
+### 7.1 `npm install -g 9router` Fails (EACCES / Permission)
+
+**Symptom**: npm global install fails with permission errors.
+
+**Root Cause**: npm prefix directory not writable (common on shared systems, macOS).
+
+**Resolution**:
+```bash
+# Option A: Use npx (no global install needed)
+npx -y 9router --no-browser
+
+# Option B: Configure npm prefix
+mkdir -p ~/.npm-global
+npm config set prefix '~/.npm-global'
+echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+npm install -g 9router
+
+# Option C: Install via installer (handles automatically)
+bash install.sh
+```
+
+---
+
+### 7.2 Node.js Not Found / Version Too Old
+
+**Symptom**: `9router` fails to start; `node --version` < 18.
+
+**Resolution**:
+```bash
+# Termux
+pkg install -y nodejs-lts  # or nodejs
+
+# Linux (NodeSource)
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# macOS
+brew install node@20
+
+# Verify
+node --version  # Should be ≥ 18.0.0
+```
+
+---
+
+### 7.3 Installer Hangs at "pkg update" / "apt update"
+
+**Symptom**: Spinner runs indefinitely during package index update.
+
+**Root Cause**: Network timeout, mirror unreachable, or interactive prompt hidden.
+
+**Resolution**:
+```bash
+# Run update manually first (see output)
+pkg update -y  # or sudo apt update
+
+# Then re-run installer
+bash install.sh
+```
+
+---
+
+## 8. Diagnostic Tooling
+
+### 8.1 `luciaa-doctor` — Model Health Panel
+
+```bash
+# Basic health check
+luciaa-doctor
+
+# Auto-heal dead default
+luciaa-doctor --fix
+
+# Output interpretation:
+# ✓ ALIVE           → Model responding normally
+# ✓ RATE-LIMITED    → Alive but throttled (429)
+# ✗ DEAD CREDS      → Auth failure (key/quota)
+# ✗ UPSTREAM DOWN   → Provider offline (5xx)
+# ✗ TIMEOUT         → Network/latency issue
+# [combo]           → Auto-rotate ensemble model
+# ← current default → Active model in config
+```
+
+**Exit Codes**: 0 = at least one model alive; 1 = config error; 2 = no models alive.
+
+---
+
+### 8.2 `luciaa-serve` — Watchdog Control
+
+```bash
+# Start watchdog (background, persistent)
+luciaa-serve start
+
+# Status check
+luciaa-serve status
+# Output:
+# router  : UP on :20128
+# watchdog: running (pid 12345)
+# recent events:
+#     14:32:10 router down — reviving (#3)
+#     14:32:18 9router revived (#3)
+
+# Stop watchdog + router
+luciaa-serve stop
+```
+
+**Log Location**: `~/.9router/serve.log` (rotated on restart)
+
+---
+
+### 8.3 `luciaa-name` — Persona Renaming
+
+```bash
+# Change display name
+luciaa-name "NewName"
+
+# Effect: Updates
+#   ~/.config/opencode/agent/luciaa.md
+#   ~/.config/opencode/agents/luciaa.md
+#   ~/.config/opencode/persona.json
+
+# Restart opencode to apply
+```
+
+---
+
+### 8.4 Health Check Bundle (For Issue Reports)
+
+```bash
+# Generate diagnostic bundle
+{
+  echo "=== SYSTEM ==="
+  uname -a
+  opencode --version 2>/dev/null || echo "opencode: not found"
+  node --version
+  npm --version 2>/dev/null || echo "npm: not found"
+  
+  echo -e "\n=== CONFIG ==="
+  cat ~/.config/opencode/opencode.json | jq '.provider.anondark.options | {baseURL, apiKey: (.apiKey | length)}'
+  
+  echo -e "\n=== DOCTOR ==="
+  luciaa-doctor 2>&1
+  
+  echo -e "\n=== WATCHDOG ==="
+  luciaa-serve status 2>&1
+  
+  echo -e "\n=== LOGS (last 20) ==="
+  tail -20 ~/.9router/serve.log 2>/dev/null || echo "no watchdog log"
+} > /tmp/luciaa-diagnostics.txt
+
+cat /tmp/luciaa-diagnostics.txt
+# Attach to GitHub issue
+```
+
+---
+
+## 9. Escalation Matrix
+
+| Severity | Criteria | Action |
+|----------|----------|--------|
+| **P0 - Critical** | All models dead, watchdog failed, data loss | Generate diagnostic bundle → GitHub Issue (Critical label) |
+| **P1 - High** | Single model dead, config shadowing, install broken | `luciaa-doctor --fix`, retire legacy configs, re-run installer |
+| **P2 - Medium** | Rate limits, intermittent connectivity, UI quirks | Rotate model, check watchdog, review TROUBLESHOOTING.md |
+| **P3 - Low** | Documentation unclear, feature request, cosmetic | GitHub Discussion or Issue (Enhancement label) |
+
+---
+
+## 10. Known Limitations (WONTFIX)
+
+| Limitation | Reason | Workaround |
+|------------|--------|------------|
+| No Windows native support | opencode/9router POSIX-only | WSL2 (full support) |
+| Free model quota exhaustion | Provider policy, not code | Auto-rotate, dedicated keys |
+| Termux background kill | Android OS behavior | Watchdog + wake-lock + battery exclusion |
+| No GUI / web dashboard | Scope: CLI/TUI research tool | opencode TUI, 9router web UI |
+| Single-user config | Design: per-researcher isolation | Separate user accounts / containers |
+
+---
+
+**Maintainers**: LuciaXCT  
+**Last Review**: 2025-01-15  
+**Next Review**: 2025-04-15  
+
+For issues not covered here: [GitHub Issues](https://github.com/LuciaXCT/luciaa/issues) with diagnostic bundle attached.

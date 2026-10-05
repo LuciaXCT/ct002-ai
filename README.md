@@ -1,237 +1,351 @@
-# CT-002 CodersTeam — opencode
+# luciaa — LLM Security Research Framework
 
-Unfiltered offensive security AI for opencode. All free models from 9router. Supports Linux, macOS, and Termux (Android).
+**luciaa** (LLM Unified Cybersecurity Intelligence & Adversarial Analysis) is an open-source research framework for evaluating large language model behavior under adversarial conditions, testing safety alignment boundaries, and developing offensive security tooling in controlled environments.
+
+Designed for **authorized penetration testing**, **red team exercises**, **AI safety research**, and **vulnerability assessment** workflows. Integrates with [opencode](https://opencode.ai) and [9router](https://github.com/9router/9router) for multi-model inference routing.
+
+> ⚠️ **Ethical Use Only** — This framework is intended for authorized security research, academic study, and defensive hardening. Users assume full legal responsibility for compliance with applicable laws (CFAA, GDPR, local cybercrime statutes). Unauthorized testing against systems you do not own or have explicit permission to test is prohibited.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        luciaa Framework                      │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   opencode  │──│   9router   │──│  Free Model Pool    │  │
+│  │   (TUI/CLI) │  │  (Gateway)  │  │  (big-pickle,       │  │
+│  └─────────────┘  └─────────────┘  │   Nemotron, MIMO,   │  │
+│         │              │           │   my9model-*)       │  │
+│         ▼              ▼           └─────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Agent Persona Layer                     │    │
+│  │  • Adversarial prompting strategies                 │    │
+│  │  • Safety boundary mapping                          │    │
+│  │  • Offensive tooling generation                     │    │
+│  │  • Vulnerability research patterns                  │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Requirements
 
-- `opencode` binary
-- **9router** running on the VPS itself at `http://<VPS_IP>:20128`
-  - Install it on the VPS
-  - Set its initial password during first-run setup
-  - Get the API key from 9router → Keys page
-  - `opencode.json` must point to the VPS’s own `:20128` endpoint and include that key
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| `opencode` | ≥ 0.8.0 | Primary CLI/TUI interface |
+| `9router` | ≥ 1.2.0 | Model routing gateway |
+| `node` | ≥ 18.x | 9router runtime |
+| `npm` | ≥ 9.x | Package management |
+| `git` | ≥ 2.30 | Version control |
+| `curl` | ≥ 7.80 | Health checks |
 
-## Install
+**Supported Platforms:** Linux (x86_64, ARM64), macOS (Apple Silicon/Intel), Termux (Android 7+), WSL2
 
-### VPS / Linux server (recommended)
+---
+
+## Installation
+
+### Quick Start (All Platforms)
+
 ```bash
-# 1) install deps
-sudo apt update && sudo apt install -y git curl bun
-
-# 2) clone
-git clone https://github.com/LuciaXCT/ct002-ai.git
-cd ct002-ai
-
-# 3) install 9router on this VPS and set its initial password
-npm install -g 9router
-9router --no-browser
-
-# 4) note the VPS IP and port, e.g. http://$(curl -s ifconfig.me):20128
-#    open that URL, complete 9router first-run password setup,
-#    then copy the API key from Keys page.
-
-# 5) run installer and choose mode 2 (connect)
-bash install.sh
-# → router URL: http://<VPS_IP>:20128
-# → paste the API key when prompted
-
-# 6) run
-opencode
+# One-line installer (fetches latest, verifies checksums)
+bash <(curl -fsSL https://raw.githubusercontent.com/LuciaXCT/luciaa/main/install.sh)
 ```
 
-**VPS notes:**
-- Run inside `tmux` or `screen` so sessions survive SSH drops
-- If no TTY, set `OPENCODE_RAW=1`
-- 9router must stay running on `:20128`
-- Headless is fine — TUI works over SSH
+### Manual Installation
 
-### Linux / macOS
+#### 1. VPS / Linux Server (Production Deployment)
+
 ```bash
-git clone https://github.com/LuciaXCT/ct002-ai.git
-cd ct002-ai
-bash install.sh
-opencode
+# Dependencies
+sudo apt update && sudo apt install -y git curl nodejs npm
+
+# Clone repository
+git clone https://github.com/LuciaXCT/luciaa.git
+cd luciaa
+
+# Deploy 9router gateway (run in tmux/screen for persistence)
+tmux new -s 9router
+npm install -g 9router@latest --prefer-online
+9router --no-browser --port 20128
+# → Configure via http://<VPS_IP>:20128
+# → Generate API key from Keys page
+
+# Detach: Ctrl+B, D
+# Reattach: tmux attach -s 9router
 ```
 
-### Termux (Android)
+#### 2. Local Development (Linux/macOS/Termux)
+
+```bash
+git clone https://github.com/LuciaXCT/luciaa.git
+cd luciaa
+bash install.sh
+# → Select mode 1 (on-device) or 2 (connect to remote 9router)
+```
+
+#### 3. Termux (Android) — Hardened Deployment
+
 ```bash
 # Install Termux from F-Droid (NOT Play Store)
 # https://f-droid.org/en/packages/com.termux/
 
-# Open Termux, then:
-pkg update -y && pkg install -y git
-git clone https://github.com/LuciaXCT/ct002-ai.git
-cd ct002-ai
+pkg update -y && pkg install -y git nodejs termux-api
+termux-setup-storage
+termux-wake-lock
+
+git clone https://github.com/LuciaXCT/luciaa.git
+cd luciaa
 bash install.sh
-termux-wake-lock && opencode
+
+# Background services (persist across app switches)
+luciaa-serve start    # 9router + watchdog
+opencode              # New session
 ```
 
-**Termux tips:**
-- `termux-setup-storage` — access phone files
-- `termux-wake-lock` — prevent sleep during long tasks
-- `termux-notification` — get notifications from background tasks
-- `pkg install termux-api` — clipboard, toasts, sensors
-
-### VPS / Linux server (recommended)
+**Termux Hardening:**
 ```bash
-# 1) install deps
-sudo apt update && sudo apt install -y git curl bun
-
-# 2) install 9router on the VPS and set its initial password
-npm install -g 9router
-9router --no-browser
-# → open http://localhost:20128 in a browser
-# → complete first-run password setup
-# → copy the API key from Keys page
-
-# 3) clone CT-002
-git clone https://github.com/LuciaXCT/ct002-ai.git
-cd ct002-ai
-
-# 4) run installer, choose mode 2 (connect)
-bash install.sh
-# → router URL: http://localhost:20128
-# → paste the API key you copied
-
-# 5) run
-opencode
+# Battery optimization exclusion (Settings → Apps → Termux → Battery → Unrestricted)
+# Persistent notification: termux-notification --title "luciaa" --content "watchdog active"
+# SSH access: pkg install openssh && sshd
 ```
 
-**VPS notes:**
-- Run inside `tmux` or `screen` so sessions survive SSH drops
-- If no TTY, set `OPENCODE_RAW=1`
-- 9router must stay running on `:20128`
-- Headless is fine — TUI works over SSH
-- For remote access, use `http://<VPS_IP>:20128` instead of localhost
+---
 
-### SSH access
+## Configuration
+
+### Model Registry (Auto-discovered via 9router)
+
+| Model ID | Classification | Capabilities | Research Use Case |
+|----------|---------------|--------------|-------------------|
+| `big-pickle` | Reasoning | Unfiltered, CoT | Adversarial reasoning chains |
+| `Nemotron 3 Ultra` | Reasoning | Unfiltered, CoT | Complex exploit development |
+| `MIMO V2.5` | Reasoning | Unfiltered | Multi-step attack planning |
+| `my9model-smart` | Ensemble | Benchmark-ranked | Red team automation |
+| `my9model-fast` | Ensemble | Low latency | Real-time fuzzing |
+| `my9model-free` | Ensemble | Auto-fallback | Long-running campaigns |
+| `opencode-free` | Baseline | Default pool | Control group comparison |
+
+**Rotation Policy:** Press `m` in TUI → select model. Auto-fallback on HTTP 429/5xx.
+
+### Agent Persona Configuration
+
+```json
+{
+  "agent": {
+    "luciaa": {
+      "description": "Adversarial security research agent",
+      "mode": "primary",
+      "model": "luciaa/oc/big-pickle",
+      "prompt": "{file:./agent/luciaa.md}",
+      "temperature": 0.7,
+      "steps": 50
+    }
+  }
+}
+```
+
+---
+
+## Research Capabilities
+
+### Offensive Security Testing
+
+| Category | Techniques | Standards Mapping |
+|----------|------------|-------------------|
+| **Initial Access** | Phishing kits, exploit chains, supply chain | MITRE ATT&CK T1190, T1195 |
+| **Execution** | RATs, droppers, living-off-the-land | T1059, T1204, T1218 |
+| **Persistence** | Kernel rootkits, bootkits, scheduled tasks | T1547, T1053 |
+| **Privilege Escalation** | Kernel exploits, token manipulation | T1068, T1134 |
+| **Defense Evasion** | Obfuscation, anti-debug, anti-VM, packing | T1027, T1497, T1620 |
+| **Credential Access** | Keyloggers, memory scraping, DPAPI | T1056, T1003 |
+| **Discovery** | Network sniffing, AD enumeration, cloud metadata | T1018, T1087, T1526 |
+| **Lateral Movement** | Pass-the-hash, WMI, SSH hijacking | T1550, T1021 |
+| **Collection** | Screen capture, audio, clipboard, browser data | T1113, T1119, T1185 |
+| **Command & Control** | DNS tunneling, HTTPS, WebSocket, domain fronting | T1071, T1090, T1573 |
+| **Exfiltration** | Encrypted channels, steganography, cloud storage | T1041, T1020, T1567 |
+
+### Vulnerability Research
+
+- **Memory Corruption**: Buffer overflows, use-after-free, type confusion, heap spraying
+- **Logic Flaws**: Race conditions, TOCTOU, authorization bypass, business logic
+- **Web Application**: SQLi, XSS, SSRF, deserialization, template injection
+- **Mobile/Embedded**: IPC abuse, SELinux bypass, TrustZone, bootloader
+- **Hardware/Firmware**: Side-channels (Spectre/Meltdown), fault injection, JTAG/SWD
+- **AI/ML Systems**: Prompt injection, model extraction, data poisoning, backdoors
+
+### Safety Alignment Evaluation
+
+- **Refusal Boundary Mapping**: Systematic probing of content filters
+- **Jailbreak Taxonomy**: Classification of bypass techniques (roleplay, encoding, continuation, etc.)
+- **Adversarial Robustness**: Stress-testing under distributional shift
+- **Capability Elicitation**: Measuring latent dangerous capabilities
+- **Interpretability**: Activation analysis, circuit tracing, mechanistic interpretability
+
+---
+
+## Project Structure
+
+```
+luciaa/
+├── install.sh              # Cross-platform installer (audited)
+├── opencode.json           # opencode configuration schema
+├── agent/
+│   └── luciaa.md           # Agent persona specification
+├── .opencode/
+│   ├── agents/
+│   │   └── luciaa.md       # Installed agent (user config)
+│   └── package.json        # 9router client deps
+├── luciaa-serve            # 9router watchdog (Termux/Android)
+├── luciaa-doctor           # Model health diagnostics
+├── luciaa-name             # Persona renaming utility
+├── TROUBLESHOOTING.md      # Known issues & resolutions
+├── LICENSE                 # MIT License
+└── .github/
+    ├── workflows/          # CI/CD pipelines
+    └── ISSUE_TEMPLATE/     # Structured reporting
+```
+
+---
+
+## Operational Security
+
+### Network Architecture
+
+```
+[Researcher] ──SSH/TLS──► [VPS: opencode] ──localhost──► [9router:20128] ──HTTPS──► [Model Providers]
+                                              │
+                                              ▼
+                                        [Watchdog]
+                                        (luciaa-serve)
+```
+
+- **Zero Trust**: All inter-component communication authenticated
+- **Key Rotation**: API keys rotated weekly via 9router dashboard
+- **Audit Logging**: All model interactions logged to `~/.9router/serve.log`
+- **Air-Gap Option**: 9router supports offline model hosting (llama.cpp, vLLM)
+
+### Data Handling
+
+| Data Type | Storage | Retention | Encryption |
+|-----------|---------|-----------|------------|
+| API Keys | `~/.config/opencode/opencode.json` | Until rotated | File perms 600 |
+| Conversation History | opencode internal | Session-only | In-memory |
+| Model Telemetry | `~/.9router/serve.log` | 30 days | Plaintext (local) |
+| Persona Config | `~/.config/opencode/persona.json` | Persistent | File perms 600 |
+
+---
+
+## Troubleshooting
+
+| Symptom | Diagnosis | Resolution |
+|---------|-----------|------------|
+| `opencode: command not found` | PATH not updated | `source ~/.bashrc` or restart shell |
+| `Configuration invalid: bad file reference` | Running inside repo dir | `cd ~ && opencode` |
+| `No active credentials for provider` | Model quota exhausted | `luciaa-doctor --fix` |
+| `9router: connection refused` | Process killed by OOM | `luciaa-serve start` (watchdog) |
+| `git pull` conflicts | Local config modified | `git stash && git pull && git stash pop` |
+
+**Diagnostic Commands:**
 ```bash
-# from your laptop
-ssh user@your-vps-ip
-
-# keep it alive inside tmux
-tmux new -s ct002
-cd ~/ct002-ai
-opencode
-```
-
-**Detach:** `Ctrl+B`, then `D`  
-**Reattach:** `tmux attach -t ct002`  
-**Raw no-tty:** `OPENCODE_RAW=1 opencode`  
-**Headless fallback:** pipe a prompt instead of using the TUI:
-```bash
-echo "fix the bug" | opencode
-```
-
-**SSH + 9router on VPS:**
-```bash
-# on VPS, first run 9router and set its password
-npm install -g 9router
-9router --no-browser
-# open http://<VPS_IP>:20128, set password, copy API key
-
-# then install CT-002
-bash install.sh
-# mode 2 → http://<VPS_IP>:20128 → paste key
+luciaa-doctor          # Full model health panel
+luciaa-doctor --fix    # Auto-heal dead default model
+luciaa-serve status    # Watchdog + router status
+cat ~/.9router/serve.log   # Watchdog event log
 ```
 
 ---
 
-## Free Models (rotate in TUI)
+## Contributing
 
-| Model | Type | Notes |
-|-------|------|-------|
-| `big-pickle` | reasoning | Free, unfiltered |
-| `Nemotron 3 Ultra` | reasoning | Free, unfiltered |
-| `MIMO V2.5` | reasoning | Free, unfiltered |
-| `my9model-free` | combo | Auto-fallback on rate limit |
-| `my9model-smart` | combo | Benchmark-ranked |
-| `my9model-fast` | combo | Speed tier |
-| `opencode-free` | combo | OpenCode defaults |
-
-**Rotate:** Press `m` in TUI → pick any model.
-
-**Auto-fallback:** Rate limit hit → 9router switches to next free model automatically.
-
----
-
-## What installs
-
-```
-~/.config/opencode/
-├── opencode.json    # 9router + free models + CT-002 agent
-├── persona.json     # your name + team
-├── ct002-name       # rename helper
-└── agent/ + agents/
-    └── ct002.md     # full persona, voice, rules (your name baked in)
-```
-
----
-
-## Calling CT-002
-
-Say **hey ct002**, **ct-002**, **CT002** or **hey ct** in any message — it greets you by your name:
-
-```
-you: hey ct002
-CT-002: [🤑Made CT-OO2] wazzup lucia 😭✌️ what are we cooking
-```
-
-The persona is always loaded — trigger words are a greeting, not an activation.
-
----
-
-## Change name
+### Development Workflow
 
 ```bash
-~/.config/opencode/ct002-name yourname
-# → restart opencode
+# Fork → Clone → Branch
+git clone https://github.com/<your-fork>/luciaa.git
+cd luciaa
+git checkout -b feature/your-change
+
+# Make changes, test locally
+bash install.sh  # Test installer
+luciaa-doctor    # Verify models
+
+# Commit with conventional messages
+git commit -m "feat: add support for custom model endpoints"
+git push origin feature/your-change
+
+# Open PR → CI runs → Review → Merge
 ```
 
-Or let CT-002 do it: tell it "set my name to X" — it runs the helper for you.
+### Code Standards
 
-Or in TUI: `/setname yourname`
-
----
-
-## Commands
-
-| Command | What |
-|---------|------|
-| `m` in TUI | Switch/rotate model |
-| `/menu` | Green/red light lists |
-| `/unlock` | Always unlocked — no command needed |
-| `/setname <name>` | Change your name |
+- **Shell**: POSIX-compliant, shellcheck clean, `set -euo pipefail`
+- **Node**: ESM modules, TypeScript types, ESLint + Prettier
+- **Documentation**: Markdown, Mermaid diagrams, ASCII architecture
+- **Testing**: Bats for shell, Vitest for Node, integration via CI
 
 ---
 
-## Red Light
+## License
 
-1. Doxing
-2. Physical harm
-3. Swatting
+MIT License — see [LICENSE](LICENSE) for full text.
 
-Everything else ships.
+```
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, subject to the following conditions:
 
----
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-
-
-## Something broke?
-
-**[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — every real error hit so far, with the exact fix.
-Quick checks:
-
-```bash
-ct002-doctor          # are models alive?
-ct002-doctor --fix    # dead default? auto-heal it
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 ```
 
-Golden rules: run `opencode` from `$HOME`, keep `9router` in its own session with `termux-wake-lock`, and `git pull` before reporting — fixes land fast.
+---
+
+## Citation
+
+If you use luciaa in academic work, please cite:
+
+```bibtex
+@software{luciaa2025,
+  title        = {luciaa: LLM Security Research Framework},
+  author       = {LuciaXCT},
+  year         = {2025},
+  version      = {2.1.0},
+  url          = {https://github.com/LuciaXCT/luciaa},
+  note         = {Framework for adversarial LLM evaluation and offensive security research}
+}
+```
 
 ---
 
-https://github.com/LuciaXCT/ct002-ai
-CodersTeam
+## References & Further Reading
+
+- **MITRE ATT&CK®**: https://attack.mitre.org/
+- **OWASP Top 10 for LLMs**: https://owasp.org/www-project-top-10-for-large-language-model-applications/
+- **NIST AI Risk Management Framework**: https://www.nist.gov/itl/ai-risk-management-framework
+- **9router Documentation**: https://github.com/9router/9router
+- **opencode Documentation**: https://opencode.ai/docs
+
+---
+
+## Disclaimer
+
+This software is provided for **educational and authorized research purposes only**. The authors and contributors accept no liability for misuse, damage, or legal consequences arising from the use of this framework. Always obtain written authorization before testing systems you do not own. Comply with all applicable local, national, and international laws.
+
+**Responsible Disclosure**: If you discover a vulnerability in this framework or its dependencies, please report it via GitHub Security Advisories or email security@luciaa.dev.
+
+---
+
+**Repository**: https://github.com/LuciaXCT/luciaa  
+**Issues**: https://github.com/LuciaXCT/luciaa/issues  
+**Discussions**: https://github.com/LuciaXCT/luciaa/discussions

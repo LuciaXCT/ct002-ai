@@ -48,9 +48,9 @@ if (legacyShadows.length) {
   console.log('    mv <file> <file>.retired');
 }
 
-const prov = cfg.provider?.anondark;
+const prov = cfg.provider?.luciaa;
 if (!prov) {
-  console.log('✗ no anondark provider in config — run the installer');
+  console.log('✗ no luciaa provider in config — run the installer');
   process.exit(1);
 }
 const base = (prov.options?.baseURL || '').replace(/\/v1\/?$/, '');
@@ -76,7 +76,7 @@ if (!key || key.includes('YOUR_9ROUTER_KEY_HERE')) {
   // _i think: no point probing, every model will scream 401_
   console.log('✗ apiKey is still placeholder in ' + CFG);
   console.log('  fix 1: cd ~ && opencode  (are you inside ~/luciaa-ai right now?)');
-  console.log('  fix 2: paste real sk-... from 9router Keys page into provider.anondark.options.apiKey');
+  console.log('  fix 2: paste real sk-... from 9router Keys page into provider.luciaa.options.apiKey');
   console.log('  fix 3: auto-fetch local key → curl -s -H "x-9r-cli-token: $(printf ...)" http://localhost:20128/api/keys');
   process.exit(1);
 }
@@ -116,7 +116,7 @@ async function probe(model) {
   }
 }
 
-const current = (cfg.agent?.anondark?.model || '').replace(/^anondark\//, '');
+const current = (cfg.agent?.luciaa?.model || '').replace(/^luciaa\//, '');
 const width = Math.max(...models.map((m) => m.length)) + 2;
 
 console.log('\n  luciaa-doctor — probing ' + models.length + ' models on ' + base + ' …\n');
@@ -140,10 +140,10 @@ if (process.argv.includes('--fix')) {
   if (currentResult && currentResult.ok) {
     console.log('  default is alive — nothing to fix');
   } else if (aliveIds.length) {
-    cfg.agent.anondark.model = 'anondark/' + aliveIds[0];
-    if (cfg.model !== undefined) cfg.model = 'anondark/' + aliveIds[0];
+    cfg.agent.luciaa.model = 'luciaa/' + aliveIds[0];
+    if (cfg.model !== undefined) cfg.model = 'luciaa/' + aliveIds[0];
     fs.writeFileSync(CFG, JSON.stringify(cfg, null, 2));
-    console.log('  fixed: default → anondark/' + aliveIds[0] + ' — restart opencode');
+    console.log('  fixed: default → luciaa/' + aliveIds[0] + ' — restart opencode');
   } else {
     console.log('  nothing alive — is the router up? run: 9router');
   }
