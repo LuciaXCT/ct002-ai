@@ -168,10 +168,33 @@ fully supported — pick **mode 2** at the prompt.
 
 ### PATH
 
-The installer adds `~/.opencode/bin` and `~/.local/bin` to `~/.bashrc`
-(creating it if missing — a fresh Termux profile has none, which is why
-upstream prints "No config file found for bash") and to `~/.zshrc` when
-present. Opt out with `--no-path`; the installer then prints the exact line
+The installer writes a PATH line to `~/.bashrc` (creating it if missing — a
+fresh Termux profile has none, which is why upstream prints "No config file
+found for bash") and to `~/.zshrc` when present:
+
+```
+export PATH="$PREFIX/bin:$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
+```
+
+**Order matters.** A working binary must come *before* a dead one, or the
+dead one shadows it. The upstream installer leaves a non-executable glibc
+binary at `~/.opencode/bin/opencode`; if that path is first, `opencode` fails
+with `cannot execute: required file not found` even after a good install. So
+the installer (1) puts `$PREFIX/bin` first whenever the binary there actually
+runs, (2) deletes a `~/.opencode/bin/opencode` that fails `--version`, and
+(3) rewrites its own previous PATH line instead of skipping it.
+
+Bash also caches command lookups, so after editing an rc file run `hash -r`
+(or start a new session) — `exec $SHELL` restarts only the shell inside the
+same terminal, not the Termux app.
+
+To check what will actually run:
+```bash
+type -a opencode      # first line = what bash executes
+hash -r               # clear the cache after any PATH change
+```
+
+Opt out of rc edits with `--no-path`; the installer then prints the exact line
 for you to add yourself.
 
 ---
@@ -259,6 +282,7 @@ Attach `/tmp/luciaa-diag.txt` to a GitHub issue.
 | `9router: bad interpreter: /usr/bin/env` | Termux has no `/usr/bin/env` | installer/watchdog heal the shebang automatically; `luciaa-serve repair` to force |
 | `opencode: cannot execute: required file not found` | upstream build is glibc; Android is bionic | `bash install.sh --opencode glibc` (Termux glibc-repo) or `--opencode termux` (native build) — both retire the dead copy so it can't shadow the new one |
 | `opencode: command not found` after install | PATH not updated | restart the shell, or `bash install.sh` again (it adds PATH); `--no-path` prints the line |
+| `opencode` fails but `$PREFIX/bin/opencode` works | a dead `~/.opencode/bin` entry is first on PATH / bash cache | re-run the installer (it reorders + retires the dead copy), then `hash -r`; check with `type -a opencode` |
 | 9router stops when you leave the app | Android froze Termux | battery exclusion + `luciaa-serve start --daemon` + `termux-wake-lock` |
 | `luciaa-serve: command not found` | installer never finished | finish §2, then re-run the installer |
 | Router up but all models 401 | first-run password not set | open `http://localhost:20128`, set password, then `luciaa-doctor --fix` |

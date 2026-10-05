@@ -649,9 +649,57 @@ done
 ok "helpers linked in $BIN_DIR"
 
 # ─── PATH (automatic; opt out with --no-path) ──────────────────
+# ORDER MATTERS: a working binary must come BEFORE a dead one, or the dead one
+# wins. On Termux the native/glibc build lands in $PREFIX/bin (already on PATH),
+# so prepending ~/.opencode/bin shadowed it with the non-executable glibc binary
+# that the upstream installer leaves there.
+PATH_DIRS=""
+PATH_DIRS_REAL=""
+usable_oc() { [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
+
+# $1 = literal to write into the rc line, $2 = real path used for de-duplication
+add_path_dir() {
+  local lit="$1" real="${2:-$1}"
+  [ -n "$lit" ] || return 0
+  case "
+$PATH_DIRS_REAL
+" in *"
+$real
+"*) return 0 ;; esac
+  PATH_DIRS_REAL="$PATH_DIRS_REAL$real
+"
+  PATH_DIRS="$PATH_DIRS$lit
+"
+}
+
 ensure_path() {
-  local line="export PATH=\"\$HOME/.opencode/bin:\$HOME/.local/bin"
-  [ -n "${BIN_DIR:-}" ] && line="$line:$BIN_DIR"
+  # retire a non-working opencode before it can shadow anything
+  local f
+  for f in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+    { [ -e "$f" ] || [ -L "$f" ]; } || continue
+    usable_oc "$f" && continue
+    rm -f "$f" 2>/dev/null && warn "retired non-working opencode: $f"
+  done
+
+  PATH_DIRS=""; PATH_DIRS_REAL=""
+  if usable_oc "$PREFIX/bin/opencode"; then
+    add_path_dir "\$PREFIX/bin" "$PREFIX/bin"        # the one that works here
+    add_path_dir "\$HOME/.opencode/bin" "$HOME/.opencode/bin"
+  else
+    add_path_dir "\$HOME/.opencode/bin" "$HOME/.opencode/bin"
+    add_path_dir "\$PREFIX/bin" "$PREFIX/bin"
+  fi
+  add_path_dir "\$HOME/.local/bin" "$HOME/.local/bin"
+  [ -n "${BIN_DIR:-}" ] && add_path_dir "$BIN_DIR" "$BIN_DIR"
+
+  local line="export PATH=\"" first=1 d
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$first" = 1 ] || line="$line:"
+    line="$line$d"; first=0
+  done <<EOF
+$PATH_DIRS
+EOF
   line="$line:\$PATH\""
 
   if [ "$ADD_PATH" != true ]; then
@@ -664,20 +712,16 @@ ensure_path() {
   # installer says "No config file found for bash".
   [ -f "$HOME/.bashrc" ] || : > "$HOME/.bashrc"
 
-  local rc added=false
+  local rc
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [ -f "$rc" ] || continue
-    grep -q '\.opencode/bin' "$rc" 2>/dev/null && continue
+    # drop any line we wrote before, so a stale/incorrect order gets corrected
+    sed -i '/^# luciaa: opencode + helpers on PATH$/,+1d' "$rc" 2>/dev/null
     printf '\n# luciaa: opencode + helpers on PATH\n%s\n' "$line" >> "$rc"
-    added=true
   done
 
-  export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${BIN_DIR:-}:$PATH"
-  if [ "$added" = true ]; then
-    ok "PATH updated in shell rc (restart shell, or: exec \$SHELL)"
-  else
-    ok "PATH already configured"
-  fi
+  export PATH="$PREFIX/bin:$HOME/.opencode/bin:$HOME/.local/bin:${BIN_DIR:-}:$PATH"
+  ok "PATH updated in shell rc (restart shell, or: exec \$SHELL)"
 }
 ensure_path
 
