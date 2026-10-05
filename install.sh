@@ -202,45 +202,50 @@ start_router_bg() {
 
 case "$MODE" in
   1)
-    log "9router" "local installation + auto-start"
+    log "9router" "local installation + auto-start (unattended)"
     heal_shebang
     resolve_r9
     if have_r9; then
       ok "9router already installed"
     else
-      ask "install 9router locally?" Y && install_9router_local || { err "required for mode 1"; exit 1; }
+      log "install" "9router (auto)"
+      install_9router_local
     fi
 
     if [ "$IS_TERMUX" = true ]; then
-      log "watchdog" "Termux detected — installing luciaa-serve (keeps router alive)"
+      log "watchdog" "Termux detected — starting luciaa-serve (auto)"
       if have luciaa-serve; then ok "watchdog already installed"; else ok "will install with helpers"; fi
       if luciaa-serve status 2>/dev/null | grep -q "router  : UP"; then
         ok "router already running (watchdog active)"
       else
-        ask "start 9router + watchdog now? (survives app switch / screen off)" Y && {
-          (luciaa-serve start >/dev/null 2>&1 &)
-          sleep 5
-          luciaa-serve status 2>/dev/null | grep -q "router  : UP" && ok "router + watchdog running" || warn "starting — check: luciaa-serve status"
-        } || warn "start later: luciaa-serve"
+        (luciaa-serve start >/dev/null 2>&1 &)
+        sleep 8
+        luciaa-serve status 2>/dev/null | grep -q "router  : UP" && ok "router + watchdog running" || warn "starting — check: luciaa-serve status"
       fi
     else
       if curl -s -m 3 -o /dev/null http://localhost:20128/v1/models; then
         ok "router already running"
       else
-        ask "start 9router in background?" Y && start_router_bg || warn "start later: 9router --no-browser"
+        start_router_bg
       fi
     fi
 
-    log "api key" "fetching from local 9router"
+    log "api key" "auto-fetching from local 9router"
     KEY_AUTO=$(fetch_local_key || true)
     if [ -n "$KEY_AUTO" ]; then
       ok "found: $(mask "$KEY_AUTO")"
-      ask "use this key?" Y && API_KEY="$KEY_AUTO"
-    fi
-    if [ -z "$API_KEY" ]; then
-      printf '%s  paste sk-... key (hidden input)%s\n' "$D" "$X"
-      printf '%s  (open http://localhost:20128 → Keys page → copy)%s\n' "$D" "$X"
-      read -rs -p "  key: " API_KEY; echo
+      API_KEY="$KEY_AUTO"
+    else
+      warn "auto-fetch failed — waiting for 9router to initialize..."
+      sleep 5
+      KEY_AUTO=$(fetch_local_key || true)
+      if [ -n "$KEY_AUTO" ]; then
+        ok "found on retry: $(mask "$KEY_AUTO")"
+        API_KEY="$KEY_AUTO"
+      else
+        warn "could not auto-fetch key — you can add it later: ~/.config/opencode/opencode.json"
+        API_KEY=""
+      fi
     fi
     ;;
 
@@ -270,7 +275,8 @@ case "$MODE" in
 esac
 
 # ─── auto-rotate ───────────────────────────────────────────────
-ask "auto-rotate free models on rate limit?" Y && ROTATE=true || ROTATE=false
+ROTATE=true
+ok "auto-rotate: ON (default)"
 
 # ─── apply config ──────────────────────────────────────────────
 mkdir -p "$TARGET/agent" "$TARGET/agents"
