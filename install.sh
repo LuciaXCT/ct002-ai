@@ -208,7 +208,7 @@ copy_from_src() {
       return 0
     fi
   fi
-  if curl -fsSL "$RAW_BASE/$rel" -o "$dest" 2>/dev/null; then
+  if curl -fsSL --connect-timeout 10 -m 30 "$RAW_BASE/$rel" -o "$dest" 2>/dev/null; then
     [ -n "$mode" ] && chmod "$mode" "$dest" 2>/dev/null
     return 0
   fi
@@ -492,7 +492,8 @@ install_opencode_official() {
   # spinner — two progress displays on one line is exactly the garbled
   # `[⠏] ■■■ 51%` mess. Let upstream own the terminal for the download.
   log "download" "opencode — ~100 MB (the bar below is upstream's)"
-  curl -fsSL https://opencode.ai/install | bash
+  # bound the download: an unbounded pipe to bash hangs forever on a stalled link
+  curl -fsSL --connect-timeout 10 -m 60 https://opencode.ai/install | bash
 }
 
 # Android/Termux native build. The upstream linux-arm64 binary is glibc and
@@ -508,14 +509,17 @@ install_opencode_termux() {
   log "resolve" "Termux-native opencode build"
   local api json tag url
   api="https://api.github.com/repos/guysoft/opencode-termux/releases/latest"
-  json="$(curl -fsSL "$api" 2>/dev/null)" || { warn "could not reach the release API"; return 1; }
+  json="$(curl -fsSL --connect-timeout 10 -m 30 "$api" 2>/dev/null)" || { warn "could not reach the release API"; return 1; }
   tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
   url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*aarch64\.deb"' | head -1 | sed 's/.*": *"//;s/"$//')"
   [ -z "$url" ] && { warn "no aarch64 .deb in release ${tag:-unknown}"; return 1; }
   local out="$HOME/.cache/luciaa/$(basename "$url")"
   mkdir -p "$(dirname "$out")"
   log "download" "opencode $tag — big download; resumable, so re-run if it drops"
-  if ! curl -fL --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$out" "$url"; then
+  # --connect-timeout bounds setup; --speed-limit/--speed-time abort a stalled
+  # transfer so --retry can resume it. No -m: a big .deb legitimately takes
+  # minutes on mobile, and a hard cap would break the -C - resume.
+  if ! curl -fL --connect-timeout 15 --speed-limit 1024 --speed-time 60 --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$out" "$url"; then
     warn "download failed — re-run to resume (uses curl -C -)"
     return 1
   fi
@@ -545,7 +549,7 @@ install_opencode_glibc() {
 
   log "resolve" "newest opencode-glibc build for aarch64"
   local json urls url ver best="" bestv=""
-  json="$(curl -fsSL https://api.github.com/repos/Hope2333/opencode-termux/releases 2>/dev/null)" \
+  json="$(curl -fsSL --connect-timeout 10 -m 30 https://api.github.com/repos/Hope2333/opencode-termux/releases 2>/dev/null)" \
     || { warn "release API unreachable"; return 1; }
   urls="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*opencode-glibc_[^"]*_aarch64\.deb"' | sed 's/.*": *"//;s/"$//')"
   while IFS= read -r url; do
@@ -568,7 +572,7 @@ EOF
   local out="$HOME/.cache/luciaa/$(basename "$best")"
   mkdir -p "$(dirname "$out")"
   log "download" "$(basename "$best") — big download; resumable, re-run if it drops"
-  if ! curl -fL --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$out" "$best"; then
+  if ! curl -fL --connect-timeout 15 --speed-limit 1024 --speed-time 60 --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$out" "$best"; then
     warn "download failed — re-run to resume (uses curl -C -)"
     return 1
   fi
