@@ -239,6 +239,7 @@ luciaa/
 ├── luciaa-serve            # 9router watchdog (Termux/Android)
 ├── luciaa-doctor           # Model health diagnostics
 ├── luciaa-name             # Persona renaming utility
+├── opencode-persona        # Custom persona authoring (opencode profile)
 ├── TROUBLESHOOTING.md      # Known issues & resolutions
 ├── LICENSE                 # MIT License
 └── .github/

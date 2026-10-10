@@ -250,7 +250,7 @@ dedup_helper_symlinks() {
   local b d
   for b in "$PREFIX_BIN" "$HOME/.local/bin"; do
     [ -n "$b" ] || continue
-    for d in luciaa-serve luciaa-doctor luciaa-name luciaa-menu ct002-serve ct002-doctor ct002-name ct002-persona; do
+    for d in luciaa-serve luciaa-doctor luciaa-name luciaa-menu ct002-serve ct002-doctor ct002-name ct002-persona opencode-persona; do
       [ -L "$b/$d" ] || continue
       [ -e "$b/$d" ] && continue
       retire "$b/$d" >/dev/null 2>&1 && ok "removed broken symlink: $b/$d"
@@ -633,9 +633,9 @@ ensure_opencode
 # the helper existed, so the guard silently failed and 9router was left
 # unguarded ("9router keeps dying").
 mkdir -p "$TARGET/agent" "$TARGET/agents"
-log "helpers" "installing luciaa-serve, luciaa-doctor, luciaa-name"
+log "helpers" "installing luciaa-serve, luciaa-doctor, luciaa-name, opencode-persona"
 HELPERS_OK=false
-for h in luciaa-serve luciaa-doctor luciaa-name; do
+for h in luciaa-serve luciaa-doctor luciaa-name opencode-persona; do
   if copy_from_src "$h" "$TARGET/$h" 755; then
     heal_shebang_file "$TARGET/$h"
     ok "installed $h"
@@ -649,7 +649,7 @@ if [ -f "$SRC_DIR/ct002-menu.mjs" ]; then
 fi
 
 BIN_DIR="$PREFIX_BIN"; [ -d "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR"
-for h in luciaa-serve luciaa-doctor luciaa-name; do
+for h in luciaa-serve luciaa-doctor luciaa-name opencode-persona; do
   [ -f "$TARGET/$h" ] || continue
   ln -sf "$TARGET/$h" "$BIN_DIR/$h"
 done

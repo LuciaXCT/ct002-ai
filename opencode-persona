@@ -1,0 +1,363 @@
+#!/bin/bash
+# opencode-persona — author, switch and apply custom personas for opencode.
+#
+#   opencode-persona list                    installed personas (* = active)
+#   opencode-persona show                    active persona + what is on disk
+#   opencode-persona use [name]              activate + render into the live prompt
+#   opencode-persona setup <file.md> [name] [--address WHO]
+#                                            import a .md and activate in one step
+#   opencode-persona add <file.md> [name] [--apply]
+#   opencode-persona new <name> [--role TEXT] [--address WHO] [--from SRC] [--edit]
+#   opencode-persona clone <from> <to>
+#   opencode-persona edit [name]             open in $EDITOR, then activate
+#   opencode-persona address <who>           change what the persona calls you
+#   opencode-persona targets                 every file a persona is written to
+#   opencode-persona rm <name>               delete a persona (never the active one)
+#
+# Personas live in ~/.config/opencode/personas/<name>.md — plain markdown you can
+# write by hand. The active one is rendered into the live agent prompt file (the
+# one opencode.json's "default_agent" points at) with {{USER_NAME}} substituted.
+# Every free-text section is yours: identity, voice, rules, anything.
+#
+# Global flags: --quiet, -q
+# Root override: OPENCODE_CONFIG_DIR (default: $XDG_CONFIG_HOME/opencode)
+
+set -u
+
+CONFIG="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
+PERSONAS="$CONFIG/personas"
+
+QUIET=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --quiet|-q) QUIET=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+CMD="${1:-list}"; shift 2>/dev/null || true
+
+say()  { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
+ok()   { [ "$QUIET" = 1 ] || printf '  \033[32m✓\033[0m %s\n' "$*"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*" >&2; }
+die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Names must be short and filesystem-safe.
+valid() { case "$1" in ""|*[!A-Za-z0-9_.-]*) return 1 ;; esac; [ "${#1}" -le 32 ]; }
+
+# Read one string field out of a JSON file (works on single-line or pretty JSON).
+json_str() {
+  local file="$1" key="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/.*\"$key\": *\"\([^\"]*\)\".*/\1/p" "$file" 2>/dev/null | head -1
+}
+
+# The agent whose prompt file opencode actually reads at startup.
+agent_name() {
+  local a; a=$(json_str "$CONFIG/opencode.json" default_agent)
+  valid "$a" || a="ct002"
+  printf '%s' "$a"
+}
+
+active_name() {
+  local n; n=$(json_str "$CONFIG/persona.json" persona)
+  valid "$n" || n=$(agent_name)
+  printf '%s' "$n"
+}
+
+# What the persona calls you: persona.json first, else what the live prompt says.
+user_name() {
+  local n
+  n=$(json_str "$CONFIG/persona.json" address)
+  valid "$n" || n=$(sed -n 's/.*name is: \*\*\([^*]*\)\*\*.*/\1/p' "$CONFIG/agent/$(agent_name).md" 2>/dev/null | head -1)
+  valid "$n" || n=$(sed -n 's/.*address them as \*\*\([^*]*\)\*\*.*/\1/p' "$CONFIG/agent/$(agent_name).md" 2>/dev/null | head -1)
+  valid "$n" || n=$(agent_name)
+  printf '%s' "$n"
+}
+
+# Keep a single most-recent backup per file so repeated applies can't pile up.
+prune_backups() {
+  local base="$1"
+  ls -1t "$base".bak.* 2>/dev/null | tail -n +2 | while read -r old; do rm -f "$old"; done
+}
+
+# Rewrite persona.json, preserving name/team/version and any other keys.
+write_meta() {
+  local pname="$1" f="$CONFIG/persona.json" n nm tm v body
+  n=$(user_name); nm=$(json_str "$f" name); tm=$(json_str "$f" team); v=$(json_str "$f" version)
+  [ -n "$nm" ] || nm="$pname"
+  [ -n "$tm" ] || tm="$pname"
+  [ -n "$v" ] || v="unknown"
+  body="{ \"name\": \"$nm\", \"team\": \"$tm\", \"address\": \"$n\", \"persona\": \"$pname\", \"version\": \"$v\" }"
+  [ -f "$f" ] && [ "$(cat "$f")" = "$body" ] && return 0
+  [ -f "$f" ] && cp -p "$f" "$f.bak.$(date +%s)" && prune_backups "$f"
+  printf '%s\n' "$body" > "$f"
+}
+
+# Every file a persona is rendered into. The live agent prompt is always
+# included; a persona-named copy is only kept up to date if it already exists,
+# and extras can be added with { "targets": ["~/path/x.md"] } in persona.json.
+target_list() {
+  local p="$1" a t
+  a=$(agent_name)
+  printf '%s\n' "$CONFIG/agent/$a.md" "$CONFIG/agents/$a.md"
+  for t in "$CONFIG/agent/$p.md" "$CONFIG/agents/$p.md"; do
+    [ -f "$t" ] && printf '%s\n' "$t"
+  done
+  sed -n 's/.*"targets": *\[\([^]]*\)\].*/\1/p' "$CONFIG/persona.json" 2>/dev/null \
+    | tr ',' '\n' | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while read -r t; do
+        [ -n "$t" ] || continue
+        case "$t" in "~/"*) printf '%s\n' "$HOME/${t#\~/}" ;; *) printf '%s\n' "$t" ;; esac
+      done
+}
+
+# Adopt the live prompt into the store the first time a persona is used, so a
+# machine that was seeded by hand still gets a real source file.
+ensure_source() {
+  local p="$1" store="$PERSONAS/$1.md" c
+  mkdir -p "$PERSONAS"
+  [ -f "$store" ] && { printf '%s' "$store"; return 0; }
+  for c in "$CONFIG/agent/$(agent_name).md" "$CONFIG/agent/$p.md" "$CONFIG/persona.md" "$HOME/$p.md"; do
+    if [ -f "$c" ]; then cp "$c" "$store"; printf '%s' "$store"; return 0; fi
+  done
+  printf '%s' "$store"
+}
+
+# apply_persona <name> — render <name>.md into every live target.
+apply_persona() {
+  local name="$1" src n esc tmp t changed=0
+  valid "$name" || die "bad persona name: $name"
+  src=$(ensure_source "$name")
+  [ -f "$src" ] || die "no such persona: $name — try: opencode-persona list"
+  n=$(user_name)
+  esc=$(printf '%s' "$n" | sed 's/[&|\\]/\\&/g')
+  tmp=$(mktemp)
+  sed "s|{{USER_NAME}}|$esc|g" "$src" > "$tmp"
+
+  while read -r t; do
+    [ -n "$t" ] || continue
+    mkdir -p "$(dirname "$t")"
+    if [ -f "$t" ] && cmp -s "$tmp" "$t"; then continue; fi
+    if [ -f "$t" ]; then cp -p "$t" "$t.bak.$(date +%s)"; prune_backups "$t"; fi
+    cp "$tmp" "$t"
+    changed=$((changed+1))
+  done < <(target_list "$name" | awk '!seen[$0]++')
+
+  rm -f "$tmp"
+  write_meta "$name"
+  if [ "$changed" -gt 0 ]; then ok "persona → $name (addressing you as $n) · $changed file(s) written"
+  else ok "persona → $name (already up to date)"; fi
+  say "  restart opencode to pick it up"
+}
+
+# A blank-but-usable custom persona. The name is ALWAYS left as the
+# {{USER_NAME}} token so `address <who>` re-renders every prompt.
+persona_template() {
+  local name="$1" role="${2:-}"
+  cat <<EOF
+# $name
+
+${role:-Describe who this persona is, what it does, and how it behaves.}
+
+## NAME
+The user's name is: **{{USER_NAME}}**
+
+- ALWAYS address them as **{{USER_NAME}}** — never "user", never generic
+
+## VOICE
+Say what you did, what you found, what's next. No filler.
+
+## RULES
+- Add any rules you want this persona to follow.
+- Anything you can describe, this persona can do.
+EOF
+}
+
+open_in_editor() {
+  local ed="${VISUAL:-${EDITOR:-}}"
+  if [ -z "$ed" ]; then
+    say "no \$EDITOR set — open this file yourself:"
+    say "  $1"
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  $ed "$1"
+}
+
+case "$CMD" in
+  list|ls)
+    mkdir -p "$PERSONAS"
+    act=$(active_name)
+    found=0
+    say ""
+    for f in "$PERSONAS"/*.md; do
+      [ -f "$f" ] || continue
+      found=1
+      b=$(basename "$f" .md)
+      mark=" "; [ "$b" = "$act" ] && mark="*"
+      desc=$(grep -m1 -v -E '^#|^---|^$|^description:' "$f" 2>/dev/null | cut -c1-52)
+      printf '  %s %-18s %s\n' "$mark" "$b" "$desc"
+    done
+    if [ "$found" = 0 ]; then
+      say "  (none yet — make one:  opencode-persona new mine)"
+    else
+      say ""
+      say "  active: $act   (agent \"$(agent_name)\", addressing you as $(user_name))"
+    fi
+    say ""
+    ;;
+
+  use|apply)
+    if [ -n "${1:-}" ]; then apply_persona "$1"
+    else apply_persona "$(active_name)"; fi
+    ;;
+
+  add)
+    apply=0; P=()
+    while [ $# -gt 0 ]; do
+      case "$1" in --apply) apply=1; shift ;; --*) shift ;; *) P+=("$1"); shift ;; esac
+    done
+    src="${P[0]:-}"; name="${P[1]:-}"
+    [ -n "$src" ] || die "usage: opencode-persona add <file.md> [name] [--apply]"
+    [ -f "$src" ] || die "no such file: $src"
+    [ -n "$name" ] || name=$(basename "$src"); name="${name%.md}"
+    valid "$name" || die "bad persona name: $name (letters, digits, . _ - only)"
+    mkdir -p "$PERSONAS"
+    [ -f "$PERSONAS/$name.md" ] && warn "overwriting existing persona: $name"
+    cp "$src" "$PERSONAS/$name.md"
+    ok "imported → $PERSONAS/$name.md"
+    if [ "$apply" = 1 ]; then apply_persona "$name"; else say "  activate it:  opencode-persona use $name"; fi
+    ;;
+
+  setup)
+    who=""; P=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --address) who="${2:-}"; shift 2 ;;
+        --*) shift ;;
+        *) P+=("$1"); shift ;;
+      esac
+    done
+    src="${P[0]:-}"; name="${P[1]:-}"
+    [ -n "$src" ] || die "usage: opencode-persona setup <file.md> [name] [--address WHO]"
+    [ -f "$src" ] || die "no such file: $src"
+    [ -n "$name" ] || name=$(basename "$src"); name="${name%.md}"
+    valid "$name" || die "bad persona name: $name"
+    mkdir -p "$PERSONAS"
+    cp "$src" "$PERSONAS/$name.md"
+    ok "imported → $PERSONAS/$name.md"
+    if [ -n "$who" ]; then
+      valid "$who" || die "bad address: $who"
+      [ -f "$CONFIG/persona.json" ] || printf '{ "name": "%s", "team": "%s", "address": "%s", "persona": "%s" }\n' \
+        "$who" "$who" "$who" "$name" > "$CONFIG/persona.json"
+      sed -i "s/\"address\": *\"[^\"]*\"/\"address\": \"$who\"/" "$CONFIG/persona.json"
+    fi
+    apply_persona "$name"
+    ;;
+
+  new)
+    role=""; who=""; from=""; doedit=0; P=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --role)    role="${2:-}"; shift 2 ;;
+        --address) who="${2:-}";  shift 2 ;;
+        --from)    from="${2:-}"; shift 2 ;;
+        --edit)    doedit=1; shift ;;
+        --*) shift ;;
+        *) P+=("$1"); shift ;;
+      esac
+    done
+    name="${P[0]:-}"
+    [ -n "$name" ] || die "usage: opencode-persona new <name> [--role TEXT] [--address WHO] [--from SRC] [--edit]"
+    valid "$name" || die "bad persona name: $name (letters, digits, . _ - only)"
+    mkdir -p "$PERSONAS"
+    [ -f "$PERSONAS/$name.md" ] && die "persona already exists: $name"
+    if [ -n "$from" ]; then
+      if [ -f "$from" ]; then cp "$from" "$PERSONAS/$name.md"
+      elif [ -f "$PERSONAS/$from.md" ]; then cp "$PERSONAS/$from.md" "$PERSONAS/$name.md"
+      else die "no such persona or file to base it on: $from"; fi
+      ok "created → $PERSONAS/$name.md (based on $from)"
+    else
+      persona_template "$name" "$role" > "$PERSONAS/$name.md"
+      ok "created → $PERSONAS/$name.md"
+    fi
+    if [ -n "$who" ]; then
+      valid "$who" || die "bad address: $who"
+      [ -f "$CONFIG/persona.json" ] || printf '{ "name": "%s", "team": "%s", "address": "%s", "persona": "%s" }\n' \
+        "$who" "$who" "$who" "$name" > "$CONFIG/persona.json"
+      sed -i "s/\"address\": *\"[^\"]*\"/\"address\": \"$who\"/" "$CONFIG/persona.json"
+    fi
+    [ "$doedit" = 1 ] && open_in_editor "$PERSONAS/$name.md"
+    say "  activate it:  opencode-persona use $name"
+    ;;
+
+  clone)
+    from="${1:-}"; to="${2:-}"
+    [ -n "$from" ] && [ -n "$to" ] || die "usage: opencode-persona clone <from> <to>"
+    valid "$to" || die "bad persona name: $to"
+    [ -f "$PERSONAS/$from.md" ] || die "no such persona: $from"
+    [ -f "$PERSONAS/$to.md" ] && die "persona already exists: $to"
+    mkdir -p "$PERSONAS"
+    cp "$PERSONAS/$from.md" "$PERSONAS/$to.md"
+    ok "cloned $from → $to  ($PERSONAS/$to.md)"
+    say "  customise it:  opencode-persona edit $to"
+    ;;
+
+  edit)
+    name="${1:-$(active_name)}"
+    valid "$name" || die "bad persona name: $name"
+    src=$(ensure_source "$name")
+    [ -f "$src" ] || die "no such persona: $name — try: opencode-persona list"
+    if open_in_editor "$src"; then apply_persona "$name"; else say "  then run:  opencode-persona use $name"; fi
+    ;;
+
+  address)
+    who="${1:-}"
+    [ -n "$who" ] || die "usage: opencode-persona address <who>"
+    valid "$who" || die "bad address: $who (letters, digits, . _ - only)"
+    [ -f "$CONFIG/persona.json" ] || printf '{ "name": "%s", "team": "%s", "address": "%s", "persona": "%s" }\n' \
+      "$who" "$who" "$who" "$(active_name)" > "$CONFIG/persona.json"
+    cp -p "$CONFIG/persona.json" "$CONFIG/persona.json.bak.$(date +%s)"; prune_backups "$CONFIG/persona.json"
+    sed -i "s/\"address\": *\"[^\"]*\"/\"address\": \"$who\"/" "$CONFIG/persona.json"
+    apply_persona "$(active_name)"
+    ;;
+
+  targets)
+    p="${1:-$(active_name)}"
+    valid "$p" || die "bad persona name: $p"
+    say ""
+    for t in $(target_list "$p" | awk '!seen[$0]++'); do
+      if [ -f "$t" ]; then printf '  exists  %s\n' "$t"; else printf '    --    %s\n' "$t"; fi
+    done
+    say ""
+    say "  extras: add { \"targets\": [\"~/path/to/agent/x.md\"] } to $CONFIG/persona.json"
+    say ""
+    ;;
+
+  show)
+    if [ "${1:-}" = "--name" ]; then active_name; exit 0; fi
+    a=$(agent_name)
+    say "  active persona  : $(active_name)"
+    say "  source file     : $PERSONAS/$(active_name).md"
+    say "  live agent file : $CONFIG/agent/$a.md"
+    say "  default agent   : $a"
+    say "  addressing you  : $(user_name)"
+    ;;
+
+  rm|delete)
+    name="${1:-}"
+    [ -n "$name" ] || die "usage: opencode-persona rm <name>"
+    [ "$name" = "$(active_name)" ] && die "can't remove the active persona — switch first: opencode-persona use <other>"
+    [ -f "$PERSONAS/$name.md" ] || die "no such persona: $name"
+    rm -f "$PERSONAS/$name.md" && ok "removed persona: $name"
+    ;;
+
+  -h|--help|help)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+
+  *)
+    die "unknown command: $CMD — try: opencode-persona list"
+    ;;
+esac
